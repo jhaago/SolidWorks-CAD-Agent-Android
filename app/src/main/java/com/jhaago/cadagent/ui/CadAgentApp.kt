@@ -8,6 +8,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -24,9 +25,13 @@ import com.jhaago.cadagent.di.AppContainer
 import com.jhaago.cadagent.ui.common.CadAgentViewModelFactory
 import com.jhaago.cadagent.ui.home.HomeScreen
 import com.jhaago.cadagent.ui.home.HomeViewModel
+import com.jhaago.cadagent.ui.jobdetail.JobDetailScreen
+import com.jhaago.cadagent.ui.jobdetail.JobDetailViewModel
 import com.jhaago.cadagent.ui.jobs.JobsScreen
 import com.jhaago.cadagent.ui.jobs.JobsViewModel
 import com.jhaago.cadagent.ui.navigation.Destination
+import com.jhaago.cadagent.ui.newjob.NewJobScreen
+import com.jhaago.cadagent.ui.newjob.NewJobViewModel
 
 @Composable
 fun CadAgentApp(container: AppContainer = remember { AppContainer() }) {
@@ -89,9 +94,23 @@ fun CadAgentApp(container: AppContainer = remember { AppContainer() }) {
                     )
                 }
                 composable(Destination.NewJob.route) {
-                    PlaceholderScreen(
-                        title = "New CAD Job",
-                        body = "Prompt submission is added in the next implementation task.",
+                    val newJobViewModel: NewJobViewModel = viewModel(
+                        factory = CadAgentViewModelFactory { NewJobViewModel(container.repository) },
+                    )
+                    val state by newJobViewModel.uiState.collectAsStateWithLifecycle()
+                    LaunchedEffect(state.submittedJobId) {
+                        state.submittedJobId?.let { jobId ->
+                            newJobViewModel.consumeSubmittedJob()
+                            navController.navigate(Destination.JobDetail.route(jobId)) {
+                                popUpTo(Destination.NewJob.route) { inclusive = true }
+                            }
+                        }
+                    }
+                    NewJobScreen(
+                        state = state,
+                        onPromptChanged = newJobViewModel::onPromptChanged,
+                        onSubmit = newJobViewModel::submit,
+                        onBack = { navController.popBackStack() },
                     )
                 }
                 composable(
@@ -99,9 +118,18 @@ fun CadAgentApp(container: AppContainer = remember { AppContainer() }) {
                     arguments = listOf(navArgument(Destination.JobDetail.ARGUMENT) { type = NavType.StringType }),
                 ) { entry ->
                     val jobId = entry.arguments?.getString(Destination.JobDetail.ARGUMENT).orEmpty()
-                    PlaceholderScreen(
-                        title = "Job Detail",
-                        body = "Job $jobId",
+                    val detailViewModel: JobDetailViewModel = viewModel(
+                        key = "job-detail-$jobId",
+                        factory = CadAgentViewModelFactory { JobDetailViewModel(jobId, container.repository) },
+                    )
+                    val state by detailViewModel.uiState.collectAsStateWithLifecycle()
+                    JobDetailScreen(
+                        state = state,
+                        onApprove = detailViewModel::approve,
+                        onRequestChanges = detailViewModel::requestChanges,
+                        onCancel = detailViewModel::cancel,
+                        onReload = detailViewModel::reload,
+                        onBack = { navController.popBackStack() },
                     )
                 }
             }

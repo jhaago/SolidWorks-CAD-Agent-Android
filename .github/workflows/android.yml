@@ -21,6 +21,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.6.0'
+          cache-read-only: false
       - name: Unit tests and debug build
         run: gradle testDebugUnitTest assembleDebug --stacktrace
       - name: Upload debug APK

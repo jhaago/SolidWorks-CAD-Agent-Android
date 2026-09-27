@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "com.jhaago.cadagent"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.jhaago.cadagent"

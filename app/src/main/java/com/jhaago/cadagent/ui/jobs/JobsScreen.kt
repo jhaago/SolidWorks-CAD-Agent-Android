@@ -3,17 +3,19 @@ package com.jhaago.cadagent.ui.jobs
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Card
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.jhaago.cadagent.ui.common.displayName
+import com.jhaago.cadagent.ui.components.JobStateBadge
+import com.jhaago.cadagent.ui.components.ScreenLoading
+import com.jhaago.cadagent.ui.components.ScreenMessage
 
 @Composable
 fun JobsScreen(
@@ -22,15 +24,17 @@ fun JobsScreen(
     modifier: Modifier = Modifier,
 ) {
     when (state) {
-        JobsUiState.Loading -> Column(modifier.padding(24.dp)) { CircularProgressIndicator() }
-        JobsUiState.Empty -> Column(modifier.padding(24.dp)) {
-            Text("All jobs", style = MaterialTheme.typography.headlineLarge)
-            Text("No CAD jobs yet.")
-        }
-        is JobsUiState.Error -> Column(modifier.padding(24.dp)) {
-            Text("All jobs", style = MaterialTheme.typography.headlineLarge)
-            Text(state.message)
-        }
+        JobsUiState.Loading -> ScreenLoading(label = "Loading jobs…", modifier = modifier)
+        JobsUiState.Empty -> ScreenMessage(
+            title = "All jobs",
+            message = "No CAD jobs yet. Create a new job from Home.",
+            modifier = modifier,
+        )
+        is JobsUiState.Error -> ScreenMessage(
+            title = "Unable to load jobs",
+            message = state.message,
+            modifier = modifier,
+        )
         is JobsUiState.Content -> LazyColumn(
             modifier = modifier.padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -43,10 +47,12 @@ fun JobsScreen(
                         .fillMaxWidth()
                         .clickable { onJobClick(job.id) },
                 ) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(job.prompt, style = MaterialTheme.typography.titleMedium)
-                        Text(job.state.displayName())
-                        if (job.isSimulated) Text("Simulated", style = MaterialTheme.typography.labelMedium)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            JobStateBadge(job.state)
+                            if (job.isSimulated) Text("Simulated", style = MaterialTheme.typography.labelMedium)
+                        }
                     }
                 }
             }

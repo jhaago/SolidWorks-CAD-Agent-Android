@@ -1,8 +1,5 @@
 package com.jhaago.cadagent.ui
 
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
@@ -12,7 +9,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
@@ -32,6 +28,8 @@ import com.jhaago.cadagent.ui.jobs.JobsViewModel
 import com.jhaago.cadagent.ui.navigation.Destination
 import com.jhaago.cadagent.ui.newjob.NewJobScreen
 import com.jhaago.cadagent.ui.newjob.NewJobViewModel
+import com.jhaago.cadagent.ui.settings.SettingsScreen
+import com.jhaago.cadagent.ui.theme.CadAgentTheme
 
 @Composable
 fun CadAgentApp(container: AppContainer = remember { AppContainer() }) {
@@ -40,7 +38,7 @@ fun CadAgentApp(container: AppContainer = remember { AppContainer() }) {
     val currentRoute = backStackEntry?.destination?.route
     val topLevel = listOf(Destination.Home, Destination.Jobs, Destination.Settings)
 
-    MaterialTheme {
+    CadAgentTheme {
         Scaffold(
             bottomBar = {
                 NavigationBar {
@@ -88,10 +86,7 @@ fun CadAgentApp(container: AppContainer = remember { AppContainer() }) {
                     )
                 }
                 composable(Destination.Settings.route) {
-                    PlaceholderScreen(
-                        title = "Settings",
-                        body = "Remote connection settings will be added after the secure gateway is designed.",
-                    )
+                    SettingsScreen()
                 }
                 composable(Destination.NewJob.route) {
                     val newJobViewModel: NewJobViewModel = viewModel(
@@ -134,13 +129,5 @@ fun CadAgentApp(container: AppContainer = remember { AppContainer() }) {
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun PlaceholderScreen(title: String, body: String) {
-    Column(Modifier.padding(24.dp)) {
-        Text(title, style = MaterialTheme.typography.headlineLarge)
-        Text(body, modifier = Modifier.padding(top = 12.dp))
     }
 }

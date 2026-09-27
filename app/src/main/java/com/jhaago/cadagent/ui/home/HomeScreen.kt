@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -19,7 +18,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.jhaago.cadagent.model.AgentAvailability
 import com.jhaago.cadagent.model.CadJob
-import com.jhaago.cadagent.ui.common.displayName
+import com.jhaago.cadagent.ui.components.JobStateBadge
+import com.jhaago.cadagent.ui.components.ScreenLoading
+import com.jhaago.cadagent.ui.components.ScreenMessage
 
 @Composable
 fun HomeScreen(
@@ -29,13 +30,12 @@ fun HomeScreen(
     modifier: Modifier = Modifier,
 ) {
     when (state) {
-        HomeUiState.Loading -> Column(modifier.padding(24.dp)) {
-            CircularProgressIndicator()
-        }
-        is HomeUiState.Error -> Column(modifier.padding(24.dp)) {
-            Text("Unable to load CAD Agent", style = MaterialTheme.typography.headlineSmall)
-            Text(state.message)
-        }
+        HomeUiState.Loading -> ScreenLoading(label = "Loading CAD Agent…", modifier = modifier)
+        is HomeUiState.Error -> ScreenMessage(
+            title = "Unable to load CAD Agent",
+            message = state.message,
+            modifier = modifier,
+        )
         is HomeUiState.Content -> LazyColumn(
             modifier = modifier.padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -91,10 +91,10 @@ private fun JobCard(job: CadJob, onJobClick: (String) -> Unit) {
             .fillMaxWidth()
             .clickable { onJobClick(job.id) },
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(job.prompt, style = MaterialTheme.typography.titleMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(job.state.displayName(), style = MaterialTheme.typography.bodyMedium)
+                JobStateBadge(job.state)
                 if (job.isSimulated) Text("Simulated", style = MaterialTheme.typography.labelMedium)
             }
         }

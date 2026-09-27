@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -20,7 +19,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.jhaago.cadagent.ui.common.displayName
+import com.jhaago.cadagent.ui.components.JobStateBadge
+import com.jhaago.cadagent.ui.components.ScreenLoading
+import com.jhaago.cadagent.ui.components.ScreenMessage
 
 @Composable
 fun JobDetailScreen(
@@ -33,17 +34,18 @@ fun JobDetailScreen(
     modifier: Modifier = Modifier,
 ) {
     when (state) {
-        JobDetailUiState.Loading -> Column(modifier.padding(24.dp)) {
-            CircularProgressIndicator()
-        }
-        is JobDetailUiState.Error -> Column(
-            modifier = modifier.padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text("Job unavailable", style = MaterialTheme.typography.headlineLarge)
-            Text(state.message)
-            if (state.recoverable) Button(onClick = onReload) { Text("Reload") }
-            TextButton(onClick = onBack) { Text("Back to jobs") }
+        JobDetailUiState.Loading -> ScreenLoading(label = "Loading CAD job…", modifier = modifier)
+        is JobDetailUiState.Error -> Column {
+            ScreenMessage(
+                title = "Job unavailable",
+                message = state.message,
+                modifier = modifier,
+                actionLabel = if (state.recoverable) "Reload" else null,
+                onAction = if (state.recoverable) onReload else null,
+            )
+            TextButton(onClick = onBack, modifier = Modifier.padding(horizontal = 12.dp)) {
+                Text("Back to jobs")
+            }
         }
         is JobDetailUiState.Content -> JobDetailContent(
             state = state,
@@ -77,7 +79,7 @@ private fun JobDetailContent(
     ) {
         item {
             Text("CAD Job", style = MaterialTheme.typography.headlineLarge)
-            Text(job.state.displayName(), style = MaterialTheme.typography.titleMedium)
+            JobStateBadge(job.state, modifier = Modifier.padding(top = 8.dp))
             if (job.isSimulated) Text("Simulated workflow", style = MaterialTheme.typography.labelMedium)
         }
         item {

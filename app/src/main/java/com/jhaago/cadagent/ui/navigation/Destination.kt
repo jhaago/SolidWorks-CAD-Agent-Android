@@ -3,6 +3,7 @@ package com.jhaago.cadagent.ui.navigation
 sealed class Destination(val route: String, val label: String) {
     data object Home : Destination("home", "Home")
     data object Jobs : Destination("jobs", "Jobs")
+    data object Remote : Destination("remote", "Remote")
     data object Settings : Destination("settings", "Settings")
     data object NewJob : Destination("new-job", "New Job")
 

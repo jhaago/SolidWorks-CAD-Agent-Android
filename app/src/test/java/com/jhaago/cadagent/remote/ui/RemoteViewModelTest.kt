@@ -90,6 +90,14 @@ class RemoteViewModelTest {
         vm.runTask()
         assertEquals(AiTaskPhase.Running, vm.uiState.value.session.task.phase)
     }
+    @Test fun `viewmodel disposal disconnects and releases held input`() {
+        val session = connected(); val input = FakeRemoteInputController(session); val vm = viewModel(session, input)
+        vm.pointer(RemotePointerEvent(PointerAction.Down, .5f, .5f))
+        assertTrue(input.hasHeldInput)
+        val store = androidx.lifecycle.ViewModelStore(); store.put("remote", vm); store.clear()
+        assertFalse(input.hasHeldInput)
+        assertEquals(RemoteConnectionState.Disconnected, session.status.value.connection)
+    }
 
     private fun connected() = FakeRemoteSessionRepository().also { it.finishConnecting(it.connect()!!) }
     private fun viewModel(session: FakeRemoteSessionRepository, input: FakeRemoteInputController = FakeRemoteInputController(session)) =

@@ -33,7 +33,7 @@ class RemoteControlFlowTest {
     @Test fun takeoverStopsTaskWithoutResuming() {
         val container = startAgent()
         compose.onNodeWithTag("take-control").performClick()
-        compose.onNodeWithTag("controller").assertTextContains("You")
+        compose.onNodeWithTag("controller").assertTextEquals("Control: You")
         compose.runOnIdle {
             val state = container.remoteSession.status.value
             assertEquals(RemoteControlMode.Manual, state.mode)
@@ -61,7 +61,7 @@ class RemoteControlFlowTest {
         remoteNode("advance-demo-task").performClick()
         compose.onNodeWithTag("dialog-take-control").performClick()
         compose.onNodeWithTag("protected-action-dialog").assertDoesNotExist()
-        compose.onNodeWithTag("controller").assertTextContains("You")
+        compose.onNodeWithTag("controller").assertTextEquals("Control: You")
         compose.runOnIdle { assertEquals(AiTaskPhase.Stopped, container.remoteSession.status.value.task.phase) }
     }
 }

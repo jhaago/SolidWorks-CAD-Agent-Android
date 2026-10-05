@@ -170,7 +170,11 @@ class LiveConnectionDriver(
                     grant = Grant(captured.token, state)
                 }
                 if (mutableFrame.value != null && !freshFrame()) {
-                    releaseAll(); mutableFrame.value = null
+                    releaseAll()
+                    // An immediate reconnect may already have published its own frame.
+                    // This heartbeat belongs to the former attempt in that case.
+                    if (!current(id)) return@synchronized
+                    mutableFrame.value = null
                     mutableStatus.value = mutableStatus.value.copy(message = "Desktop image is stale. Waiting for a current view.")
                 }
             }

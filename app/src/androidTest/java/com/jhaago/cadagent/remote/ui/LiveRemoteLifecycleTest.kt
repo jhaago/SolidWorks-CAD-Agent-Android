@@ -32,7 +32,8 @@ class LiveRemoteLifecycleTest {
                 "session/create" -> { connecting?.await(); controlling = false; """{"sessionToken":"token","session":${state()}}""" }
                 "session/resume" -> { controlling = true; epoch++; state() }
                 "session/close", "session/release" -> { controlling = false; epoch++; "{}" }
-                "display/frame" -> """{"frameId":${++frame},"displayGeneration":1,"width":1,"height":1,"capturedAt":"2026-10-05T00:00:00Z","cursorX":0.5,"cursorY":0.5,"jpegBytes":"${Base64.getEncoder().encodeToString(jpeg)}"}"""
+                "agent/status" -> """{"agentHostAvailable":true,"executionMode":"Real","model":"gpt-5.6-sol","solidWorks":{"running":true,"attached":true,"visible":true,"version":"SOLIDWORKS 2020","activeDocument":null},"activeJob":null}"""
+                "display/frame" -> """{"frameId":${++frame},"displayGeneration":1,"width":1,"height":1,"capturedAt":"2026-10-05T00:00:00Z","ageAtResponseMs":0,"cursorX":0.5,"cursorY":0.5,"jpegBytes":"${Base64.getEncoder().encodeToString(jpeg)}"}"""
                 else -> state()
             })
         }

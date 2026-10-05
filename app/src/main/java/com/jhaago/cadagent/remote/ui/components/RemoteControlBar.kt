@@ -22,7 +22,7 @@ fun RemoteControlBar(state: RemoteWorkstationStatus, onTakeControl: () -> Unit, 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = onTakeControl,
-                    enabled = connected && controlAvailable && !state.controlPending && !state.task.active && state.controller != RemoteController.User,
+                    enabled = connected && controlAvailable && !state.controlPending && (!state.task.active || !state.isLive) && state.controller != RemoteController.User,
                     modifier = Modifier.testTag("take-control"),
                 ) { Text(if (state.isLive) "Resume Control" else "Take Control") }
                 OutlinedButton(

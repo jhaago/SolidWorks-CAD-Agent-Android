@@ -3,8 +3,11 @@ package com.jhaago.cadagent.remote.live
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import android.system.Os
+import android.system.OsConstants
 import android.util.AtomicFile
 import java.io.File
+import java.io.FileOutputStream
 import java.security.KeyStore
 import java.security.MessageDigest
 import javax.crypto.Cipher
@@ -45,14 +48,26 @@ class KeystoreRemoteCredentialStore(context: Context) : RemoteCredentialStore {
     }
     @Synchronized override fun write(workstation: PairedWorkstation) {
         val atomic = file(workstation.endpoint)
+        val pending = File(atomic.baseFile.path + ".new")
+        val backup = File(atomic.baseFile.path + ".bak")
         try {
+            // AtomicFile.finishWrite logs failed sync/rename operations. Persist
+            // explicitly so a failed commit cannot be reported as a paired phone.
+            check(directory.isDirectory && directory.canWrite() && !backup.exists())
             val json = JSONObject(mapOf("origin" to workstation.endpoint.origin, "deviceId" to workstation.deviceId, "credential" to workstation.credential))
             val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key(true)) }
             val bytes = byteArrayOf(1) + cipher.iv + cipher.doFinal(json.toString().toByteArray(Charsets.UTF_8))
-            val output = atomic.startWrite()
-            try { output.write(bytes); atomic.finishWrite(output) }
-            catch (error: Exception) { atomic.failWrite(output); throw error }
-        } catch (_: Exception) { throw RemoteFailure(0, "storage_failed", "Pairing could not be saved securely.") }
+            FileOutputStream(pending).use { output -> output.write(bytes); output.fd.sync() }
+            Os.rename(pending.path, atomic.baseFile.path)
+            val directoryFd = Os.open(directory.path, OsConstants.O_RDONLY or OsConstants.O_DIRECTORY, 0)
+            try { Os.fsync(directoryFd) } finally { Os.close(directoryFd) }
+            check(atomic.baseFile.isFile && !pending.exists() && !backup.exists())
+            val verified = read(workstation.endpoint)
+            check(verified != null && verified.endpoint == workstation.endpoint && verified.deviceId == workstation.deviceId && verified.credential == workstation.credential)
+        } catch (_: Exception) {
+            pending.delete()
+            throw RemoteFailure(0, "storage_failed", "Pairing could not be saved securely.")
+        }
     }
     @Synchronized override fun delete(endpoint: RemoteEndpoint) {
         try {

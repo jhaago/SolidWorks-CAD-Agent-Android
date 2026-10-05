@@ -35,7 +35,7 @@ class LiveConnectionDriver(
     private var controlVersion = 0L
     private var allowInput = false
     private var sequence = 0L
-    private var lastFrameAt = Long.MIN_VALUE
+    private var frameValidUntil = Long.MIN_VALUE
     private var renewAt = Long.MAX_VALUE
     private var grant: Grant? = null
     private var connectionJob: Job? = null
@@ -195,12 +195,17 @@ class LiveConnectionDriver(
             val parsed = readFrame(response.body)
             synchronized(gate) {
                 if (!current(id) || grant?.token != captured.token) return@synchronized
+                // Server age uses only the Windows clock. The entire request and
+                // decode time is charged to the phone's monotonic clock, so device
+                // clock skew cannot turn old pixels into a fresh control surface.
+                val budget = 3000 - parsed.second
+                if (nowMillis() - started >= budget) return@synchronized
                 val previous = mutableFrame.value
-                if (previous != null && previous.displayGeneration != parsed.displayGeneration) {
+                if (previous != null && previous.displayGeneration != parsed.first.displayGeneration) {
                     releaseAll()
                     if (!current(id)) return@synchronized
                 }
-                mutableFrame.value = parsed; lastFrameAt = nowMillis()
+                mutableFrame.value = parsed.first; frameValidUntil = started + budget
             }
             delay(maxOf(200L, 200 - (nowMillis() - started)))
         }
@@ -239,7 +244,7 @@ class LiveConnectionDriver(
             }
         }
     }
-    private fun freshFrame() = mutableFrame.value != null && nowMillis() - lastFrameAt < 3000
+    private fun freshFrame() = mutableFrame.value != null && nowMillis() < frameValidUntil
     private fun publish(connection: RemoteConnectionState, message: String?) {
         mutableStatus.value = mutableStatus.value.copy(connection = connection, controller = RemoteController.None, mode = RemoteControlMode.Manual, controlPending = false, message = message)
     }
@@ -251,14 +256,15 @@ class LiveConnectionDriver(
         val epoch = json.getLong("authorityEpoch"); require(epoch > 0)
         Session(json.requiredString("sessionId", 128), epoch, json.getBoolean("controlling"))
     }
-    private fun readFrame(body: String): RemoteDisplayFrame = decode {
+    private fun readFrame(body: String): Pair<RemoteDisplayFrame, Long> = decode {
         val json = JSONObject(body); val width = json.getInt("width"); val height = json.getInt("height")
         require(width in 1..1600 && height in 1..1600)
         val bytes = Base64.getDecoder().decode(json.requiredString("jpegBytes", 2796204)); require(bytes.size in 1..2097152)
         val generation = json.getLong("displayGeneration"); val frameId = json.getLong("frameId"); require(generation > 0 && frameId > 0)
+        val age = json.getLong("ageAtResponseMs"); require(age in 0..3000)
         val x = json.getDouble("cursorX"); val y = json.getDouble("cursorY"); require(x.isFinite() && y.isFinite() && x in 0.0..1.0 && y in 0.0..1.0)
         OffsetDateTime.parse(json.requiredString("capturedAt", 128))
-        RemoteDisplayFrame(width, height, "Live workstation", bytes, generation, frameId, x.toFloat(), y.toFloat()).also { require(validateImage(it)) }
+        RemoteDisplayFrame(width, height, "Live workstation", bytes, generation, frameId, x.toFloat(), y.toFloat()).also { require(validateImage(it)) } to age
     }
     private fun <T> decode(action: () -> T): T = try { action() } catch (_: Exception) { throw RemoteFailure(0, "invalid_response", "The workstation returned an invalid remote response.") }
     private fun safeMessage(error: Exception) = if (error is RemoteFailure) error.message else "The remote connection failed. Check the Windows control window."

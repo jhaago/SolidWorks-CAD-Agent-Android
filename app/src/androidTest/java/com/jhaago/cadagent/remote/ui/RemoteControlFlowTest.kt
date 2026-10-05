@@ -12,15 +12,21 @@ import org.junit.Test
 class RemoteControlFlowTest {
     @get:Rule val compose = createComposeRule()
 
+    private fun remoteNode(tag: String): SemanticsNodeInteraction {
+        // Lazy items outside the viewport have no semantics node until composed.
+        compose.onNodeWithTag("remote-content").performScrollToNode(hasTestTag(tag))
+        return compose.onNodeWithTag(tag)
+    }
+
     private fun startAgent(): AppContainer {
         val container = AppContainer()
         compose.setContent { CadAgentApp(container) }
         compose.onNodeWithText("Remote").performClick()
         compose.onNodeWithTag("connect-remote").performClick()
         compose.waitUntil(5000) { container.remoteSession.status.value.connection == RemoteConnectionState.Connected }
-        compose.onNodeWithTag("mode-Agent").performScrollTo().performClick()
-        compose.onNodeWithTag("ai-instruction").performScrollTo().performTextInput("Prepare the plate")
-        compose.onNodeWithTag("run-ai-task").performScrollTo().performClick()
+        remoteNode("mode-Agent").performClick()
+        remoteNode("ai-instruction").performTextInput("Prepare the plate")
+        remoteNode("run-ai-task").performClick()
         return container
     }
 
@@ -38,8 +44,8 @@ class RemoteControlFlowTest {
 
     @Test fun printConfirmationCannotAutoApproveAndRejectStopsTask() {
         val container = startAgent()
-        compose.onNodeWithTag("advance-demo-task").performScrollTo().performClick()
-        compose.onNodeWithTag("advance-demo-task").performScrollTo().performClick()
+        remoteNode("advance-demo-task").performClick()
+        remoteNode("advance-demo-task").performClick()
         compose.onNodeWithTag("protected-action-dialog").assertIsDisplayed()
         compose.runOnIdle {
             assertEquals(ProtectedActionDisposition.Pending, container.remoteSession.status.value.protectedAction!!.disposition)
@@ -51,8 +57,8 @@ class RemoteControlFlowTest {
 
     @Test fun takeoverIsAvailableWhileConfirmationIsOpen() {
         val container = startAgent()
-        compose.onNodeWithTag("advance-demo-task").performScrollTo().performClick()
-        compose.onNodeWithTag("advance-demo-task").performScrollTo().performClick()
+        remoteNode("advance-demo-task").performClick()
+        remoteNode("advance-demo-task").performClick()
         compose.onNodeWithTag("dialog-take-control").performClick()
         compose.onNodeWithTag("protected-action-dialog").assertDoesNotExist()
         compose.onNodeWithTag("controller").assertTextContains("You")

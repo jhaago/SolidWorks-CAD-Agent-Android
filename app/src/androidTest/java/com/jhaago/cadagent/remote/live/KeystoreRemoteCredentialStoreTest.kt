@@ -53,5 +53,24 @@ class KeystoreRemoteCredentialStoreTest {
             store.delete(endpoint)
         }
     }
+    @Test fun failedAtomicRenameDoesNotReportPairingSaved() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val endpoint = RemoteEndpoint.parse("https://" + UUID.randomUUID() + ".example")
+        val store = KeystoreRemoteCredentialStore(context)
+        val before = context.noBackupFilesDir.listFiles()?.toSet().orEmpty()
+        store.write(PairedWorkstation(endpoint, "device", "first"))
+        val base = (context.noBackupFilesDir.listFiles()!!.toSet() - before).single()
+        store.delete(endpoint)
+        assertTrue(base.mkdir())
+        try {
+            var failure: RemoteFailure? = null
+            try { store.write(PairedWorkstation(endpoint, "device", "second")) }
+            catch (error: RemoteFailure) { failure = error }
+            assertNotNull("A failed atomic rename must not claim the credential was saved", failure)
+        } finally {
+            assertTrue(base.delete())
+            store.delete(endpoint)
+        }
+    }
 
 }

@@ -19,6 +19,7 @@ class LiveConnectionDriverTest {
         var inputGate: CompletableDeferred<Unit>? = null
         var inputFail = false
         var heartbeatGate: CompletableDeferred<Unit>? = null
+        var capturedAt = "2026-10-05T00:00:00Z"
         fun state() = """{"sessionId":"session","authorityEpoch":$epoch,"controlling":$controlling,"expiresAt":"2026-10-05T00:05:00Z"}"""
         override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
             operations += operation
@@ -29,7 +30,7 @@ class LiveConnectionDriverTest {
                 "session/close" -> { controlling = false; "{}" }
                 "display/frame" -> {
                     frameGate?.await()
-                    """{"frameId":1,"displayGeneration":$generation,"width":1,"height":1,"capturedAt":"2026-10-05T00:00:00Z","cursorX":0.5,"cursorY":0.5,"jpegBytes":"/9j/2Q=="}"""
+                    """{"frameId":1,"displayGeneration":$generation,"width":1,"height":1,"capturedAt":"$capturedAt","cursorX":0.5,"cursorY":0.5,"jpegBytes":"/9j/2Q=="}"""
                 }
                 "input" -> { inputGate?.await(); if (inputFail) throw RemoteFailure(0, "timeout", "Timed out"); "{}" }
                 "session/heartbeat" -> { val snapshot = state(); heartbeatGate?.await(); snapshot }
@@ -82,6 +83,23 @@ class LiveConnectionDriverTest {
         server.frameGate = CompletableDeferred(); advanceTimeBy(4000); runCurrent()
         assertEquals(RemoteController.None, driver.status.value.controller)
         assertFalse(driver.sendPointer(RemotePointerEvent(PointerAction.Click, .5f, .5f)))
+    }
+    @Test fun delayedPixelsCannotBecomeFreshByArrivingNow() = runTest {
+        val server = Server().apply { capturedAt = "2026-10-04T23:59:50Z" }
+        val driver = driver(server); driver.connect(); runCurrent()
+        assertNull("A ten-second-old capture must not be displayed as fresh", driver.frame.value)
+        driver.resumeControl(); runCurrent()
+        assertEquals(RemoteController.None, driver.status.value.controller)
+        assertFalse(driver.sendPointer(RemotePointerEvent(PointerAction.Click, .5f, .5f)))
+    }
+    @Test fun delayedSuccessfulFrameResponseCannotEnableInput() = runTest {
+        val server = Server().apply { frameGate = CompletableDeferred() }
+        val driver = driver(server); driver.connect(); runCurrent()
+        advanceTimeBy(4001); runCurrent()
+        server.frameGate!!.complete(Unit); runCurrent()
+        assertNull("A response delayed four seconds must not refresh old pixels", driver.frame.value)
+        driver.resumeControl(); runCurrent()
+        assertEquals(RemoteController.None, driver.status.value.controller)
     }
     @Test fun wrongGenerationCannotEnqueue() = runTest {
         val server = Server(); val driver = driver(server); driver.connect(); runCurrent(); driver.resumeControl(); runCurrent()

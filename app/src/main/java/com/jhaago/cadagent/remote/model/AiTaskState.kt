@@ -1,6 +1,6 @@
 package com.jhaago.cadagent.remote.model
 
-enum class AiTaskPhase { Idle, Running, AwaitingProtectedAction, Completed, Stopped }
+enum class AiTaskPhase { Idle, Running, Stopping, AwaitingProtectedAction, Completed, Stopped }
 data class AiTaskState(
     val id: String? = null,
     val instruction: String = "",
@@ -8,5 +8,5 @@ data class AiTaskState(
     val step: Int = 0,
     val message: String = "No AI task running",
 ) {
-    val active: Boolean get() = phase == AiTaskPhase.Running || phase == AiTaskPhase.AwaitingProtectedAction
+    val active: Boolean get() = phase == AiTaskPhase.Running || phase == AiTaskPhase.Stopping || phase == AiTaskPhase.AwaitingProtectedAction
 }

@@ -129,4 +129,27 @@ class LiveConnectionDriverTest {
         assertTrue(driver.sendPointer(RemotePointerEvent(PointerAction.Click, .5f, .5f))); runCurrent()
         assertEquals(2L, server.operations.last { it.route == "input" }.payload["authorityEpoch"])
     }
+    @Test fun tokenRenewalIgnoresAFrameFailureForTheSupersededToken() = runTest {
+        val server = Server(); val frameGate = CompletableDeferred<Unit>(); var token = "token"
+        var blockFrame = false
+        val transport = object : RemoteTransport {
+            override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
+                if (operation.route == "session/renew") {
+                    token = "renewed"
+                    return RemoteResponse(200, """{"sessionToken":"renewed","session":${server.state()}}""")
+                }
+                if (operation.route == "display/frame" && blockFrame) {
+                    blockFrame = false; frameGate.await()
+                    if (operation.secret != token) throw RemoteFailure(401, "session_invalid", "Old token")
+                }
+                return server.call(endpoint, operation)
+            }
+        }
+        val driver = driver(transport); driver.connect(); runCurrent(); advanceTimeBy(239800); runCurrent()
+        blockFrame = true; advanceTimeBy(201); runCurrent()
+        frameGate.complete(Unit); runCurrent()
+        assertEquals(RemoteConnectionState.Connected, driver.status.value.connection)
+        assertEquals(RemoteController.None, driver.status.value.controller)
+        assertEquals(1, server.operations.count { it.route == "session/create" })
+    }
 }

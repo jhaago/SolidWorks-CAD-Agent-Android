@@ -206,4 +206,15 @@ class LiveConnectionDriverTest {
         assertEquals(1, attempts)
     }
 
+    @Test fun releasedInputStartsAFreshViewOnlySessionWithoutReplay() = runTest {
+        val server = Server(); val driver = driver(server); driver.connect(); runCurrent()
+        driver.resumeControl(); runCurrent()
+        assertTrue(driver.sendKeyboard(RemoteKeyboardEvent("A", KeyAction.Down))); runCurrent()
+        driver.releaseAll(); runCurrent()
+        assertEquals(2, server.operations.count { it.route == "session/create" })
+        assertEquals(RemoteController.None, driver.status.value.controller)
+        assertEquals(1, server.operations.count { it.route == "input" })
+        assertFalse(driver.sendKeyboard(RemoteKeyboardEvent("A", KeyAction.Up)))
+    }
+
 }

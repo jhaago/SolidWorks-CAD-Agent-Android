@@ -1,0 +1,120 @@
+package com.jhaago.cadagent.remote.live
+
+import com.jhaago.cadagent.remote.input.*
+import com.jhaago.cadagent.remote.model.*
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.test.*
+import org.junit.Assert.*
+import org.junit.Test
+
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+class LiveConnectionDriverTest {
+    private class Server : RemoteTransport {
+        val operations = mutableListOf<RemoteOperation>()
+        var epoch = 1L
+        var controlling = false
+        var generation = 1L
+        var frameGate: CompletableDeferred<Unit>? = null
+        var inputGate: CompletableDeferred<Unit>? = null
+        var inputFail = false
+        fun state() = """{"sessionId":"session","authorityEpoch":$epoch,"controlling":$controlling,"expiresAt":"2026-10-05T00:05:00Z"}"""
+        override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
+            operations += operation
+            val body = when (operation.route) {
+                "session/create", "session/renew" -> { controlling = false; """{"sessionToken":"token","session":${state()}}""" }
+                "session/resume", "session/take-control" -> { controlling = true; epoch++; state() }
+                "session/release" -> { controlling = false; epoch++; "{}" }
+                "session/close" -> { controlling = false; "{}" }
+                "display/frame" -> {
+                    frameGate?.await()
+                    """{"frameId":1,"displayGeneration":$generation,"width":1,"height":1,"capturedAt":"2026-10-05T00:00:00Z","cursorX":0.5,"cursorY":0.5,"jpegBytes":"/9j/2Q=="}"""
+                }
+                "input" -> { inputGate?.await(); if (inputFail) throw RemoteFailure(0, "timeout", "Timed out"); "{}" }
+                else -> state()
+            }
+            return RemoteResponse(200, body)
+        }
+    }
+    private fun TestScope.driver(server: RemoteTransport) = LiveConnectionDriver(
+        backgroundScope, server, PairedWorkstation(RemoteEndpoint.parse("https://pc.example"), "device", "credential"),
+        nowMillis = { testScheduler.currentTime }, validateImage = { true },
+    ).also { it.setForeground(true) }
+
+    @Test fun reconnectBackoffIsOneTwoFourEightFifteen() = runTest {
+        val attempts = mutableListOf<Long>()
+        val transport = object : RemoteTransport {
+            override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
+                attempts += testScheduler.currentTime
+                throw RemoteFailure(0, "unavailable", "Unavailable")
+            }
+        }
+        val driver = driver(transport); driver.connect(); runCurrent(); advanceTimeBy(30001); runCurrent()
+        assertEquals(listOf(0L, 1000L, 3000L, 7000L, 15000L, 30000L), attempts)
+        driver.disconnect(); advanceTimeBy(60000); runCurrent(); assertEquals(6, attempts.size)
+    }
+    @Test fun reconnectRequiresResumeAndClearsHeldInput() = runTest {
+        val server = Server(); val driver = driver(server); driver.connect(); runCurrent()
+        assertEquals(RemoteController.None, driver.status.value.controller)
+        driver.resumeControl(); runCurrent(); assertEquals(RemoteController.User, driver.status.value.controller)
+        assertTrue(driver.sendPointer(RemotePointerEvent(PointerAction.Down, .5f, .5f))); runCurrent()
+        driver.disconnect(); runCurrent(); driver.connect(); runCurrent()
+        assertEquals(RemoteController.None, driver.status.value.controller)
+        assertEquals(1, server.operations.count { it.route == "input" })
+    }
+    @Test fun backgroundStopsRetryAndReleasesInput() = runTest {
+        val server = Server(); val driver = driver(server); driver.connect(); runCurrent(); driver.resumeControl(); runCurrent()
+        driver.setForeground(false); runCurrent(); advanceTimeBy(60000); runCurrent()
+        assertEquals(RemoteConnectionState.Disconnected, driver.status.value.connection)
+        assertEquals(1, server.operations.count { it.route == "session/create" })
+        assertTrue(server.operations.any { it.route == "session/close" })
+    }
+    @Test fun framePollingHasOneInflightAndFiveFpsLimit() = runTest {
+        val server = Server(); val driver = driver(server); driver.connect(); runCurrent(); advanceTimeBy(999); runCurrent()
+        assertEquals(5, server.operations.count { it.route == "display/frame" })
+        server.frameGate = CompletableDeferred(); advanceTimeBy(10000); runCurrent()
+        assertEquals(6, server.operations.count { it.route == "display/frame" })
+    }
+    @Test fun staleFrameDisablesInput() = runTest {
+        val server = Server(); val driver = driver(server); driver.connect(); runCurrent(); driver.resumeControl(); runCurrent()
+        server.frameGate = CompletableDeferred(); advanceTimeBy(4000); runCurrent()
+        assertEquals(RemoteController.None, driver.status.value.controller)
+        assertFalse(driver.sendPointer(RemotePointerEvent(PointerAction.Click, .5f, .5f)))
+    }
+    @Test fun wrongGenerationCannotEnqueue() = runTest {
+        val server = Server(); val driver = driver(server); driver.connect(); runCurrent(); driver.resumeControl(); runCurrent()
+        server.generation = 2; advanceTimeBy(201); runCurrent()
+        assertEquals(RemoteController.None, driver.status.value.controller)
+        assertFalse(driver.sendPointer(RemotePointerEvent(PointerAction.Click, .5f, .5f)))
+    }
+    @Test fun queueOverflowStopsControlAndReleaseCannotBeDropped() = runTest {
+        val server = Server(); val driver = driver(server); driver.connect(); runCurrent(); driver.resumeControl(); runCurrent()
+        server.inputGate = CompletableDeferred()
+        assertTrue(driver.sendKeyboard(RemoteKeyboardEvent("A", KeyAction.Down))); runCurrent()
+        repeat(100) { assertTrue(driver.sendKeyboard(RemoteKeyboardEvent("A", KeyAction.Down))) }
+        assertFalse(driver.sendKeyboard(RemoteKeyboardEvent("A", KeyAction.Up))); runCurrent()
+        assertEquals(RemoteController.None, driver.status.value.controller)
+        assertTrue(server.operations.any { it.route == "session/release" })
+        assertEquals(1, server.operations.count { it.route == "input" })
+    }
+    @Test fun inputTimeoutDoesNotRetry() = runTest {
+        val server = Server(); val driver = driver(server); driver.connect(); runCurrent(); driver.resumeControl(); runCurrent()
+        server.inputFail = true; assertTrue(driver.sendPointer(RemotePointerEvent(PointerAction.Click, .5f, .5f))); runCurrent()
+        advanceTimeBy(5000); runCurrent()
+        assertEquals(1, server.operations.count { it.route == "input" })
+        assertEquals(RemoteController.None, driver.status.value.controller)
+    }
+    @Test fun disconnectCancelsLateCompletion() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val server = Server()
+        val transport = object : RemoteTransport {
+            override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
+                if (operation.route == "session/create") gate.await()
+                return server.call(endpoint, operation)
+            }
+        }
+        val driver = driver(transport); driver.connect(); runCurrent(); driver.disconnect(); gate.complete(Unit); runCurrent()
+        assertEquals(RemoteConnectionState.Disconnected, driver.status.value.connection)
+        assertEquals(RemoteController.None, driver.status.value.controller)
+    }
+}

@@ -32,6 +32,9 @@ fun RemoteDisplaySurface(frame: RemoteDisplayFrame, onPointer: (RemotePointerEve
     inputEnabled: Boolean = true, onCancelled: () -> Unit = {}) {
     val send by rememberUpdatedState(onPointer)
     val cancel by rememberUpdatedState(onCancelled)
+    // Compose can synthesize an Up when removing a touched node, rather than
+    // throw into its gesture loop. Disposal must still invalidate authority.
+    DisposableEffect(Unit) { onDispose { cancel() } }
     val image by produceState<ImageBitmap?>(null, frame) {
         value = frame.jpegBytes?.let { bytes -> withContext(Dispatchers.Default) {
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()

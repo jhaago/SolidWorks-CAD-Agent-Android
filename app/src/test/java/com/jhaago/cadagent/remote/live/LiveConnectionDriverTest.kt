@@ -18,6 +18,7 @@ class LiveConnectionDriverTest {
         var frameGate: CompletableDeferred<Unit>? = null
         var inputGate: CompletableDeferred<Unit>? = null
         var inputFail = false
+        var heartbeatGate: CompletableDeferred<Unit>? = null
         fun state() = """{"sessionId":"session","authorityEpoch":$epoch,"controlling":$controlling,"expiresAt":"2026-10-05T00:05:00Z"}"""
         override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
             operations += operation
@@ -31,6 +32,7 @@ class LiveConnectionDriverTest {
                     """{"frameId":1,"displayGeneration":$generation,"width":1,"height":1,"capturedAt":"2026-10-05T00:00:00Z","cursorX":0.5,"cursorY":0.5,"jpegBytes":"/9j/2Q=="}"""
                 }
                 "input" -> { inputGate?.await(); if (inputFail) throw RemoteFailure(0, "timeout", "Timed out"); "{}" }
+                "session/heartbeat" -> { val snapshot = state(); heartbeatGate?.await(); snapshot }
                 else -> state()
             }
             return RemoteResponse(200, body)
@@ -116,5 +118,15 @@ class LiveConnectionDriverTest {
         val driver = driver(transport); driver.connect(); runCurrent(); driver.disconnect(); gate.complete(Unit); runCurrent()
         assertEquals(RemoteConnectionState.Disconnected, driver.status.value.connection)
         assertEquals(RemoteController.None, driver.status.value.controller)
+    }
+    @Test fun lateHeartbeatCannotUndoFreshResume() = runTest {
+        val server = Server(); val driver = driver(server); driver.connect(); runCurrent()
+        server.heartbeatGate = CompletableDeferred(); advanceTimeBy(1001); runCurrent()
+        driver.resumeControl(); runCurrent()
+        assertEquals(RemoteController.User, driver.status.value.controller)
+        server.heartbeatGate!!.complete(Unit); runCurrent()
+        assertEquals(RemoteController.User, driver.status.value.controller)
+        assertTrue(driver.sendPointer(RemotePointerEvent(PointerAction.Click, .5f, .5f))); runCurrent()
+        assertEquals(2L, server.operations.last { it.route == "input" }.payload["authorityEpoch"])
     }
 }

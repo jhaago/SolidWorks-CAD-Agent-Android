@@ -217,4 +217,23 @@ class LiveConnectionDriverTest {
         assertFalse(driver.sendKeyboard(RemoteKeyboardEvent("A", KeyAction.Up)))
     }
 
+    @Test fun staleHeartbeatCannotEraseAnImmediatelyReconnectedFrame() = runTest {
+        val server = Server(); var creates = 0
+        val transport = object : RemoteTransport {
+            override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
+                if (operation.route == "session/create" && ++creates > 1) server.frameGate = null
+                return server.call(endpoint, operation)
+            }
+        }
+        val immediate = kotlinx.coroutines.CoroutineScope(backgroundScope.coroutineContext + UnconfinedTestDispatcher(testScheduler))
+        val driver = LiveConnectionDriver(immediate, transport,
+            PairedWorkstation(RemoteEndpoint.parse("https://pc.example"), "device", "credential"),
+            nowMillis = { testScheduler.currentTime }, validateImage = { true })
+        driver.setForeground(true); driver.connect(); driver.resumeControl()
+        server.frameGate = CompletableDeferred(); advanceTimeBy(3001); runCurrent()
+        assertEquals(2, creates)
+        assertNotNull("An old heartbeat callback must not clear the new session's frame", driver.frame.value)
+        assertEquals(RemoteController.None, driver.status.value.controller)
+    }
+
 }

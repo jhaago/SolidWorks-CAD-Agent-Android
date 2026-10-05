@@ -33,10 +33,13 @@ jobs:
           files = list(Path("app/build/test-results/testDebugUnitTest").glob("TEST-*.xml"))
           suites = [ET.parse(p).getroot() for p in files]
           for suite in suites:
-              for case in suite.findall("testcase"):
+              for case in suite.iter():
+                  if case.tag.rsplit("}", 1)[-1] != "testcase":
+                      continue
                   for failure in list(case):
-                      if failure.tag in ("failure", "error"):
-                          print("Failed test:", case.get("classname"), case.get("name"), failure.get("message", "")[:1000])
+                      if failure.tag.rsplit("}", 1)[-1] in ("failure", "error"):
+                          detail = failure.get("message") or failure.text or ""
+                          print("Failed test:", case.get("classname"), case.get("name"), detail[:1000])
           totals = {k: sum(int(s.get(k, 0)) for s in suites) for k in ("tests", "failures", "errors", "skipped")}
           print("Unit test totals:", totals)
           assert totals["tests"] > 0 and totals["failures"] == totals["errors"] == 0
@@ -99,10 +102,13 @@ jobs:
           files = list(Path("app/build/outputs/androidTest-results/connected").rglob("TEST-*.xml"))
           suites = [ET.parse(p).getroot() for p in files]
           for suite in suites:
-              for case in suite.findall("testcase"):
+              for case in suite.iter():
+                  if case.tag.rsplit("}", 1)[-1] != "testcase":
+                      continue
                   for failure in list(case):
-                      if failure.tag in ("failure", "error"):
-                          print("Failed test:", case.get("classname"), case.get("name"), failure.get("message", "")[:1000])
+                      if failure.tag.rsplit("}", 1)[-1] in ("failure", "error"):
+                          detail = failure.get("message") or failure.text or ""
+                          print("Failed test:", case.get("classname"), case.get("name"), detail[:1000])
           totals = {k: sum(int(s.get(k, 0)) for s in suites) for k in ("tests", "failures", "errors", "skipped")}
           print("Emulator test totals:", totals)
           assert totals["tests"] > 0 and totals["failures"] == totals["errors"] == 0

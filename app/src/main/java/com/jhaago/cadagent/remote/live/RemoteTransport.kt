@@ -14,7 +14,7 @@ class RemoteOperation(
     override fun toString() = "Remote operation ($method $route)"
 }
 class RemoteResponse(val status: Int, val body: String) { override fun toString() = "Remote response (HTTP $status)" }
-class RemoteFailure(val status: Int, val code: String, message: String) : Exception(message)
+class RemoteFailure(val status: Int, val code: String, override val message: String) : Exception(message)
 
 interface RemoteCredentialStore {
     fun read(endpoint: RemoteEndpoint): PairedWorkstation?

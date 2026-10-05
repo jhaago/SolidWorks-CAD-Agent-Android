@@ -72,7 +72,10 @@ class RemoteViewModel(
     fun takeControl() {
         if (session.status.value.task.active) {
             ai.stopTask()
-            return
+            // Demo cancellation is synchronous, so preserve one-tap takeover there.
+            // Live cancellation remains active in Stopping until the PC confirms it,
+            // which deliberately blocks manual authority and input.
+            if (session.status.value.task.active) return
         }
         input.releaseAll()
         session.takeControl()
@@ -107,8 +110,8 @@ class RemoteViewModel(
 
     fun pointer(event: RemotePointerEvent): Boolean {
         if (!event.valid) return false
-        interruptForManualInput()
-        val accepted = input.sendPointer(event)
+        val ready = interruptForManualInput()
+        val accepted = ready && input.sendPointer(event)
         editor.value = editor.value.copy(inputMessage = if (accepted) {
             if (session.status.value.isLive) "Manual input sent" else "Demo input: ${event.action} at ${"%.2f".format(event.x)}, ${"%.2f".format(event.y)}"
         } else "Input unavailable: connect, stop any AI task, and resume control")
@@ -117,20 +120,23 @@ class RemoteViewModel(
 
     fun keyboard(event: RemoteKeyboardEvent): Boolean {
         if (!event.valid) return false
-        interruptForManualInput()
-        val accepted = input.sendKeyboard(event)
+        val ready = interruptForManualInput()
+        val accepted = ready && input.sendKeyboard(event)
         editor.value = editor.value.copy(inputMessage = if (accepted) {
             if (session.status.value.isLive) "Manual key sent" else "Demo keyboard input recorded"
         } else "Input unavailable: connect, stop any AI task, and resume control")
         return accepted
     }
 
-    private fun interruptForManualInput() {
+    private fun interruptForManualInput(): Boolean {
         if (session.status.value.task.active) {
             ai.stopTask()
-            return
+            if (session.status.value.task.active) return false
         }
-        if (session.status.value.mode == RemoteControlMode.Agent || session.status.value.controller == RemoteController.Ai) takeControl()
+        if (session.status.value.mode == RemoteControlMode.Agent || session.status.value.controller == RemoteController.Ai) {
+            takeControl()
+        }
+        return !session.status.value.task.active && session.status.value.controller == RemoteController.User
     }
 
     override fun onCleared() {

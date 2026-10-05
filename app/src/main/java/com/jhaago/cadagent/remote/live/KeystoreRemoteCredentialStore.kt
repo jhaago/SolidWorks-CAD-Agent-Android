@@ -59,7 +59,10 @@ class KeystoreRemoteCredentialStore(context: Context) : RemoteCredentialStore {
             val bytes = byteArrayOf(1) + cipher.iv + cipher.doFinal(json.toString().toByteArray(Charsets.UTF_8))
             FileOutputStream(pending).use { output -> output.write(bytes); output.fd.sync() }
             Os.rename(pending.path, atomic.baseFile.path)
-            val directoryFd = Os.open(directory.path, OsConstants.O_RDONLY or OsConstants.O_DIRECTORY, 0)
+            // Android's public OsConstants does not expose O_DIRECTORY on every
+            // compile SDK. Opening the known directory read-only still yields a
+            // directory fd that can be fsync'd after the atomic rename.
+            val directoryFd = Os.open(directory.path, OsConstants.O_RDONLY, 0)
             try { Os.fsync(directoryFd) } finally { Os.close(directoryFd) }
             check(atomic.baseFile.isFile && !pending.exists() && !backup.exists())
             val verified = read(workstation.endpoint)

@@ -33,7 +33,8 @@ class LiveRemoteFlowTest {
                 "session/create" -> { controlling = false; """{"sessionToken":"token","session":${state()}}""" }
                 "session/resume" -> { controlling = true; epoch++; state() }
                 "session/release", "session/close" -> { controlling = false; epoch++; "{}" }
-                "display/frame" -> { if (holdFrames) awaitCancellation(); """{"frameId":${++frameId},"displayGeneration":1,"width":64,"height":32,"capturedAt":"2026-10-05T00:00:00Z","cursorX":0.5,"cursorY":0.5,"jpegBytes":"${Base64.getEncoder().encodeToString(jpeg)}"}""" }
+                "agent/status" -> """{"agentHostAvailable":true,"executionMode":"Real","model":"gpt-5.6-sol","solidWorks":{"running":true,"attached":true,"visible":true,"version":"SOLIDWORKS 2020","activeDocument":"Fixture.SLDPRT"},"activeJob":null}"""
+                "display/frame" -> { if (holdFrames) awaitCancellation(); """{"frameId":${++frameId},"displayGeneration":1,"width":64,"height":32,"capturedAt":"2026-10-05T00:00:00Z","ageAtResponseMs":0,"cursorX":0.5,"cursorY":0.5,"jpegBytes":"${Base64.getEncoder().encodeToString(jpeg)}"}""" }
                 else -> state()
             }
             return RemoteResponse(200, body)
@@ -62,7 +63,9 @@ class LiveRemoteFlowTest {
             val pixels = compose.onNodeWithTag("remote-display").captureToImage().toPixelMap()
             val blue = pixels[pixels.width / 2, pixels.height / 3]
             assertTrue("The real JPEG fixture must be rendered", blue.blue > .8f && blue.red < .2f)
-            compose.onNodeWithTag("run-ai-task").assertDoesNotExist()
+            compose.onNodeWithTag("remote-content").performScrollToNode(hasTestTag("run-ai-task"))
+            compose.onNodeWithTag("run-ai-task").assertExists().assertIsNotEnabled()
+            compose.onNodeWithTag("stop-ai").assertExists().assertIsNotEnabled()
             compose.onNodeWithTag("take-control").performClick()
             compose.waitUntil(5000) { driver.status.value.controller == RemoteController.User }
             compose.onNodeWithText("Home").performClick()
@@ -75,7 +78,8 @@ class LiveRemoteFlowTest {
             server.holdFrames = true
             compose.waitUntil(6000) { driver.frame.value == null && driver.status.value.controller == RemoteController.None }
             compose.onNodeWithTag("take-control").assertIsNotEnabled()
-            compose.onNodeWithTag("stop-remote").performClick()
+            compose.onNodeWithTag("remote-content").performScrollToNode(hasTestTag("disconnect-remote"))
+            compose.onNodeWithTag("disconnect-remote").performClick()
             compose.waitUntil(5000) { driver.status.value.connection == RemoteConnectionState.Disconnected }
         } finally { driver.close(); scope.cancel() }
     }

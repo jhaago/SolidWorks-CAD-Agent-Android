@@ -43,6 +43,8 @@ Live capture, authentication, transport and input must be implemented and physic
 
 ## Verification and remaining device checks
 
-The local complete unit suite passed 47 tests (zero failures/errors/skips), and both debug APKs compiled. Emulator CI exercises the four navigation/handoff/confirmation tests; its result is recorded separately. Live Windows/SOLIDWORKS acceptance is not part of this milestone.
+The local complete unit suite passed 47 tests (zero failures/errors/skips), and both debug APKs compiled. [Android CI run 37248882919](https://github.com/jhaago/SolidWorks-CAD-Agent-Android/actions/runs/37248882919) passed for commit `8b99dfd`: the full unit suite/debug build job passed, and all **4 Android 35 emulator UI tests passed, with 0 failures and 0 skipped**. The delivered APK comes from this run. Live Windows/SOLIDWORKS acceptance is not part of this milestone.
 
 Independent whole-branch review found no Important/Critical issues. Deferred minor verification gap: ViewModel-store disposal, Activity rotation and gesture cancellation are implemented but lack dedicated automated device tests. Check rotation, leaving/closing the app while connecting, and cancelling a drag during the next Android device session. These checks are not claimed to have passed.
+
+The initial emulator runs exposed two test-harness errors: locating an uncomposed lazy-list child and matching a substring as an entire semantic label. The same flow tests failed first, then passed after using lazy-list-aware scrolling and exact controller text. All task/confirmation/state assertions remain in place. Local Android lint passed with 0 fatal/errors and 11 warnings in existing files (dependency/API updates, icon and style conventions); those were left outside this milestone.

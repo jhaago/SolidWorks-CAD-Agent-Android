@@ -10,6 +10,14 @@ data class RemoteWorkstationStatus(
     val isLive: Boolean = false,
     val message: String? = null,
     val controlPending: Boolean = false,
+    val agentHostAvailable: Boolean? = null,
+    val executionMode: String? = null,
+    val aiModel: String? = null,
+    val solidWorksRunning: Boolean = false,
+    val solidWorksAttached: Boolean = false,
+    val solidWorksVisible: Boolean = false,
+    val solidWorksVersion: String? = null,
+    val activeDocument: String? = null,
 ) {
     init { require(connection == RemoteConnectionState.Connected || controller == RemoteController.None) }
 }

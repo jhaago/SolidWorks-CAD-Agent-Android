@@ -3,6 +3,7 @@ package com.jhaago.cadagent.remote.ui
 import android.graphics.Bitmap
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.graphics.toPixelMap
 import com.jhaago.cadagent.di.AppContainer
 import com.jhaago.cadagent.remote.live.*
 import com.jhaago.cadagent.remote.model.*
@@ -56,7 +57,11 @@ class LiveRemoteFlowTest {
             compose.waitUntil(5000) { driver.frame.value != null }
             compose.onNodeWithTag("controller").assertTextEquals("Control: No controller")
             compose.onNodeWithTag("remote-content").performScrollToNode(hasTestTag("remote-display"))
+            compose.waitUntil(5000) { compose.onAllNodesWithTag("live-frame").fetchSemanticsNodes().isNotEmpty() }
             compose.onNodeWithTag("live-frame").assertExists()
+            val pixels = compose.onNodeWithTag("remote-display").captureToImage().toPixelMap()
+            val blue = pixels[pixels.width / 2, pixels.height / 3]
+            assertTrue("The real JPEG fixture must be rendered", blue.blue > .8f && blue.red < .2f)
             compose.onNodeWithTag("run-ai-task").assertDoesNotExist()
             compose.onNodeWithTag("take-control").performClick()
             compose.waitUntil(5000) { driver.status.value.controller == RemoteController.User }
@@ -65,6 +70,11 @@ class LiveRemoteFlowTest {
             compose.onNodeWithText("Remote").performClick()
             compose.waitUntil(5000) { driver.frame.value != null }
             compose.onNodeWithTag("controller").assertTextEquals("Control: No controller")
+            compose.onNodeWithTag("take-control").performClick()
+            compose.waitUntil(5000) { driver.status.value.controller == RemoteController.User }
+            server.holdFrames = true
+            compose.waitUntil(6000) { driver.frame.value == null && driver.status.value.controller == RemoteController.None }
+            compose.onNodeWithTag("take-control").assertIsNotEnabled()
             compose.onNodeWithTag("stop-remote").performClick()
             compose.waitUntil(5000) { driver.status.value.connection == RemoteConnectionState.Disconnected }
         } finally { driver.close(); scope.cancel() }

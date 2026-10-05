@@ -152,4 +152,44 @@ class LiveConnectionDriverTest {
         assertEquals(RemoteController.None, driver.status.value.controller)
         assertEquals(1, server.operations.count { it.route == "session/create" })
     }
+    @Test fun failedReleaseCannotKeepTheOldLeaseAlive() = runTest {
+        val server = Server(); var opened = false
+        val transport = object : RemoteTransport {
+            override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
+                if (operation.route == "session/create") {
+                    if (opened) throw RemoteFailure(409, "session_busy", "Busy")
+                    opened = true
+                }
+                if (operation.route in setOf("session/release", "session/close"))
+                    throw RemoteFailure(0, "connection_failed", "Release unavailable")
+                return server.call(endpoint, operation)
+            }
+        }
+        val driver = driver(transport); driver.connect(); runCurrent(); driver.resumeControl(); runCurrent()
+        assertTrue(driver.sendKeyboard(RemoteKeyboardEvent("A", KeyAction.Down))); runCurrent()
+        assertEquals(1, server.operations.count { it.route == "input" })
+        driver.releaseAll(); runCurrent(); advanceTimeBy(4001); runCurrent()
+        assertEquals(RemoteController.None, driver.status.value.controller)
+        assertEquals("An unconfirmed release must not extend the old input lease", 0, server.operations.count { it.route == "session/heartbeat" })
+    }
+    @Test fun pendingReleaseCannotKeepTheOldLeaseAlive() = runTest {
+        val server = Server(); var opened = false; val release = CompletableDeferred<Unit>()
+        val transport = object : RemoteTransport {
+            override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
+                if (operation.route == "session/create") {
+                    if (opened) throw RemoteFailure(409, "session_busy", "Busy")
+                    opened = true
+                }
+                if (operation.route == "session/release") release.await()
+                if (operation.route == "session/close") throw RemoteFailure(0, "connection_failed", "Close unavailable")
+                return server.call(endpoint, operation)
+            }
+        }
+        val driver = driver(transport); driver.connect(); runCurrent(); driver.resumeControl(); runCurrent()
+        assertTrue(driver.sendKeyboard(RemoteKeyboardEvent("A", KeyAction.Down))); runCurrent()
+        driver.releaseAll(); runCurrent(); advanceTimeBy(2001); runCurrent()
+        assertEquals(RemoteController.None, driver.status.value.controller)
+        assertEquals(0, server.operations.count { it.route == "session/heartbeat" })
+    }
+
 }

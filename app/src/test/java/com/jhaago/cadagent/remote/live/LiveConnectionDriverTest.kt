@@ -192,4 +192,18 @@ class LiveConnectionDriverTest {
         assertEquals(0, server.operations.count { it.route == "session/heartbeat" })
     }
 
+    @Test fun retryBackoffKeepsAnExplicitCancelActionAvailable() = runTest {
+        var attempts = 0
+        val transport = object : RemoteTransport {
+            override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
+                attempts++; throw RemoteFailure(0, "unavailable", "Unavailable")
+            }
+        }
+        val driver = driver(transport); driver.connect(); runCurrent()
+        assertEquals("Retry waiting must keep Cancel connection visible", RemoteConnectionState.Connecting, driver.status.value.connection)
+        driver.disconnect(); advanceTimeBy(5001); runCurrent()
+        assertEquals(RemoteConnectionState.Disconnected, driver.status.value.connection)
+        assertEquals(1, attempts)
+    }
+
 }

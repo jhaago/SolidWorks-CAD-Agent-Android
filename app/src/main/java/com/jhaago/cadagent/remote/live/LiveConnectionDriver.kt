@@ -172,7 +172,14 @@ class LiveConnectionDriver(
         while (current(id)) {
             val started = nowMillis()
             val captured = synchronized(gate) { grant } ?: return
-            val response = transport.call(workstation.endpoint, RemoteOperation("display/frame", "GET", "Session", captured.token))
+            val response = try { transport.call(workstation.endpoint, RemoteOperation("display/frame", "GET", "Session", captured.token)) }
+                catch (error: CancellationException) { throw error }
+                catch (error: Exception) {
+                    // Renewal rotates the token while an independent frame request can still
+                    // be in flight. Its failure says nothing about the replacement session.
+                    if (synchronized(gate) { current(id) && grant?.token != captured.token }) continue
+                    throw error
+                }
             val parsed = readFrame(response.body)
             synchronized(gate) {
                 if (!current(id) || grant?.token != captured.token) return@synchronized

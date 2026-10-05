@@ -10,19 +10,22 @@ class LiveRemoteSessionRepository(private val driver: LiveConnectionDriver) : Re
     override fun connect() = driver.connect()
     override fun disconnect() = driver.disconnect()
     override fun takeControl() = driver.resumeControl()
-    override fun setMode(mode: RemoteControlMode) = Unit // Live AI execution is unavailable in this milestone.
+    override fun setMode(mode: RemoteControlMode) = driver.setMode(mode)
     fun setForeground(value: Boolean) = driver.setForeground(value)
 }
+
 class LiveRemoteDisplaySource(driver: LiveConnectionDriver) : RemoteDisplaySource { override val frame = driver.frame }
+
 class LiveRemoteInputController(private val driver: LiveConnectionDriver) : RemoteInputController {
     override fun sendPointer(event: RemotePointerEvent) = driver.sendPointer(event)
     override fun sendKeyboard(event: RemoteKeyboardEvent) = driver.sendKeyboard(event)
     override fun releaseAll() = driver.releaseAll()
 }
-class UnavailableAiControlRepository(private val driver: LiveConnectionDriver) : AiControlRepository {
+
+class LiveAiControlRepository(private val driver: LiveConnectionDriver) : AiControlRepository {
     override val status = driver.status
-    override fun submitTask(instruction: String): String? = null
-    override fun stopTask() = driver.releaseAll()
+    override fun submitTask(instruction: String) = driver.submitAiTask(instruction)
+    override fun stopTask() = driver.stopAiTask()
     override fun approveProtectedAction(id: String) = false
     override fun rejectProtectedAction(id: String) = false
 }

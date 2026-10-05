@@ -88,7 +88,7 @@ class LiveConnectionDriver(
                         if (!current(id)) return@launch
                         val old = grant
                         invalidateAuthority(); grant = null; runtime = null; mutableFrame.value = null
-                        publish(RemoteConnectionState.Disconnected, message = safeMessage(error))
+                        publish(RemoteConnectionState.Connecting, message = safeMessage(error))
                         old?.let { cleanup(it, "session/close") }
                     }
                     delay(longArrayOf(1000, 2000, 4000, 8000, 15000)[minOf(retry++, 4)])
@@ -102,7 +102,7 @@ class LiveConnectionDriver(
         attempt++; connectionJob?.cancel(); connectionJob = null; controlJob?.cancel()
         val old = grant
         invalidateAuthority(); grant = null; runtime = null; mutableFrame.value = null
-        publish(RemoteConnectionState.Disconnected, message = if (keepWanted && wanted) "Paused while Remote is not visible." else null)
+        publish(RemoteConnectionState.Disconnected, message = if (keepWanted && wanted && !foreground) "Paused while Remote is not visible." else null)
         old?.let { cleanup(it, "session/close") }
     }
     fun resumeControl() = synchronized(gate) {
@@ -130,7 +130,13 @@ class LiveConnectionDriver(
         val shouldRelease = allowInput || mutableStatus.value.controlPending || queue.isNotEmpty()
         invalidateAuthority()
         if (mutableStatus.value.connection == RemoteConnectionState.Connected) mutableStatus.value = mutableStatus.value.copy(controller = RemoteController.None, controlPending = false, message = "Viewing only. Resume control when ready.")
-        if (shouldRelease && old != null) cleanup(old, "session/release")
+        if (shouldRelease && old != null) {
+            // End the entire old lease before attempting network cleanup. A failed
+            // release must never be kept alive by otherwise healthy heartbeats.
+            cleanup(old, "session/release")
+            stopConnection(keepWanted = true)
+            if (foreground && wanted) startConnection()
+        }
     }
     private fun invalidateAuthority() {
         allowInput = false; controlVersion++; sequence = 0; queue.clear(); inputJob?.cancel(); controlJob?.cancel()
@@ -158,7 +164,9 @@ class LiveConnectionDriver(
                 if (!current(id) || grant?.token != captured.token) return@synchronized
                 val latestEpoch = grant!!.session.epoch
                 if (state.epoch >= latestEpoch) {
-                    if (allowInput && (state.epoch != latestEpoch || !state.controlling)) releaseAll()
+                    if (allowInput && (state.epoch != latestEpoch || !state.controlling)) {
+                        releaseAll(); return@synchronized
+                    }
                     grant = Grant(captured.token, state)
                 }
                 if (mutableFrame.value != null && !freshFrame()) {
@@ -184,7 +192,10 @@ class LiveConnectionDriver(
             synchronized(gate) {
                 if (!current(id) || grant?.token != captured.token) return@synchronized
                 val previous = mutableFrame.value
-                if (previous != null && previous.displayGeneration != parsed.displayGeneration) releaseAll()
+                if (previous != null && previous.displayGeneration != parsed.displayGeneration) {
+                    releaseAll()
+                    if (!current(id)) return@synchronized
+                }
                 mutableFrame.value = parsed; lastFrameAt = nowMillis()
             }
             delay(maxOf(200L, 200 - (nowMillis() - started)))

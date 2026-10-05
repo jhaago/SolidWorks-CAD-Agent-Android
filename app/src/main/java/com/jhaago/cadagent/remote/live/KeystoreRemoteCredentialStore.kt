@@ -54,5 +54,16 @@ class KeystoreRemoteCredentialStore(context: Context) : RemoteCredentialStore {
             catch (error: Exception) { atomic.failWrite(output); throw error }
         } catch (_: Exception) { throw RemoteFailure(0, "storage_failed", "Pairing could not be saved securely.") }
     }
-    @Synchronized override fun delete(endpoint: RemoteEndpoint) { file(endpoint).delete() }
+    @Synchronized override fun delete(endpoint: RemoteEndpoint) {
+        try {
+            require(directory.isDirectory && directory.canRead() && directory.canWrite())
+            val atomic = file(endpoint)
+            atomic.delete()
+            // AtomicFile ignores deletion failures. Check all recovery copies too.
+            val records = listOf(atomic.baseFile, File(atomic.baseFile.path + ".bak"), File(atomic.baseFile.path + ".new"))
+            check(records.none { it.exists() })
+        } catch (_: Exception) {
+            throw RemoteFailure(0, "storage_failed", "Saved pairing could not be removed securely.")
+        }
+    }
 }

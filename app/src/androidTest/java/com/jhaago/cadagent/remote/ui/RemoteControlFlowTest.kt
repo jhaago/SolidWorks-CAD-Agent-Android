@@ -23,6 +23,14 @@ class RemoteControlFlowTest {
         compose.setContent { CadAgentApp(container) }
         compose.onNodeWithText("Remote").performClick()
         compose.onNodeWithTag("connect-remote").performClick()
+        // The production demo connection intentionally settles after a short coroutine delay and
+        // is covered by RemoteViewModelTest. Complete this fake deterministically here so emulator
+        // scheduling cannot turn the control-flow test into a timing test.
+        compose.runOnIdle {
+            if (container.remoteSession.status.value.connection == RemoteConnectionState.Connecting) {
+                container.remoteDemo.finishConnecting(1L)
+            }
+        }
         compose.waitUntil(5000) { container.remoteSession.status.value.connection == RemoteConnectionState.Connected }
         remoteNode("mode-Agent").performClick()
         compose.waitUntil(5000) { container.remoteSession.status.value.mode == RemoteControlMode.Agent }

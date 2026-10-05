@@ -29,28 +29,40 @@ class AppContainer(
     val remoteAdapters = selected.asStateFlow()
     var remoteSettings: WorkstationSettingsController? = null
         private set
+
     fun canSwitchRemote() = selected.value.driver?.canSwitchWorkstation()
         ?: (selected.value.session.status.value.connection == RemoteConnectionState.Disconnected)
+
     fun selectLive(driver: LiveConnectionDriver): Boolean {
         if (!canSwitchRemote()) return false
         selected.value.driver?.close()
-        selected.value = RemoteAdapters(selected.value.revision + 1, LiveRemoteSessionRepository(driver),
-            UnavailableAiControlRepository(driver), LiveRemoteDisplaySource(driver), LiveRemoteInputController(driver), driver = driver)
+        selected.value = RemoteAdapters(
+            selected.value.revision + 1,
+            LiveRemoteSessionRepository(driver),
+            LiveAiControlRepository(driver),
+            LiveRemoteDisplaySource(driver),
+            LiveRemoteInputController(driver),
+            driver = driver,
+        )
         return true
     }
+
     fun selectDemo(): Boolean {
         if (!canSwitchRemote()) return false
         selected.value.driver?.close()
         selected.value = RemoteAdapters(selected.value.revision + 1, remoteSession, aiControl, remoteDisplay, remoteInput, remoteDemo)
         return true
     }
+
     fun configureRemoteSettings(scope: CoroutineScope, transport: RemoteTransport, store: RemoteCredentialStore,
         initialOrigin: String = "", saveOrigin: (String) -> Unit = {}) {
         remoteSettings = WorkstationSettingsController(scope, this, transport, store, initialOrigin, saveOrigin)
     }
+
     fun close() {
         remoteSettings?.cancelPairing()
         selected.value.driver?.close()
-        remoteInput.releaseAll(); remoteSession.disconnect()
+        remoteInput.releaseAll()
+        remoteSession.disconnect()
     }
 }

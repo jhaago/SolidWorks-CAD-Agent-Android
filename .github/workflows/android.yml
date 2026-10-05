@@ -24,6 +24,22 @@ jobs:
           cache-read-only: false
       - name: Unit tests and debug build
         run: gradle testDebugUnitTest assembleDebug lintDebug --stacktrace
+      - name: Summarize unit and lint results
+        if: always()
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          files = list(Path("app/build/test-results/testDebugUnitTest").glob("TEST-*.xml"))
+          suites = [ET.parse(p).getroot() for p in files]
+          totals = {k: sum(int(s.get(k, 0)) for s in suites) for k in ("tests", "failures", "errors", "skipped")}
+          print("Unit test totals:", totals)
+          assert totals["tests"] > 0 and totals["failures"] == totals["errors"] == 0
+          lint = ET.parse("app/build/reports/lint-results-debug.xml").getroot()
+          counts = {s: sum(i.get("severity") == s for i in lint) for s in ("Fatal", "Error", "Warning")}
+          print("Lint totals:", counts)
+          assert counts["Fatal"] == counts["Error"] == 0
+          PY
       - name: Upload unit and lint reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -69,9 +85,23 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
           script: gradle connectedDebugAndroidTest --stacktrace
+      - name: Summarize emulator results
+        if: always()
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          files = list(Path("app/build/outputs/androidTest-results/connected").rglob("TEST-*.xml"))
+          suites = [ET.parse(p).getroot() for p in files]
+          totals = {k: sum(int(s.get(k, 0)) for s in suites) for k in ("tests", "failures", "errors", "skipped")}
+          print("Emulator test totals:", totals)
+          assert totals["tests"] > 0 and totals["failures"] == totals["errors"] == 0
+          PY
       - name: Upload UI test reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: remote-ui-test-reports
-          path: app/build/reports/androidTests/connected/
+          path: |
+            app/build/reports/androidTests/connected/
+            app/build/outputs/androidTest-results/connected/

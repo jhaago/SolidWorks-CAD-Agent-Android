@@ -25,13 +25,16 @@ class RemoteControlFlowTest {
         compose.onNodeWithTag("connect-remote").performClick()
         compose.waitUntil(5000) { container.remoteSession.status.value.connection == RemoteConnectionState.Connected }
         remoteNode("mode-Agent").performClick()
+        compose.waitUntil(5000) { container.remoteSession.status.value.mode == RemoteControlMode.Agent }
         remoteNode("ai-instruction").performTextInput("Prepare the plate")
-        remoteNode("run-ai-task").performClick()
+        remoteNode("run-ai-task").assertIsEnabled().performClick()
+        compose.waitUntil(5000) { container.remoteSession.status.value.task.phase == AiTaskPhase.Running }
         return container
     }
 
     @Test fun takeoverStopsTaskWithoutResuming() {
         val container = startAgent()
+        // Demo Stop is synchronous, so one tap still stops then takes control.
         compose.onNodeWithTag("take-control").performClick()
         compose.onNodeWithTag("controller").assertTextEquals("Control: You")
         compose.runOnIdle {

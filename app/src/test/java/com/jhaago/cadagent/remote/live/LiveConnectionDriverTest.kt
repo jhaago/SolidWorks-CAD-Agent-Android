@@ -145,8 +145,8 @@ class LiveConnectionDriverTest {
                 return server.call(endpoint, operation)
             }
         }
-        val driver = driver(transport); driver.connect(); runCurrent(); advanceTimeBy(239800); runCurrent()
-        blockFrame = true; advanceTimeBy(201); runCurrent()
+        val driver = driver(transport); driver.connect(); runCurrent(); advanceTimeBy(239600); runCurrent()
+        blockFrame = true; advanceTimeBy(401); runCurrent()
         frameGate.complete(Unit); runCurrent()
         assertEquals(RemoteConnectionState.Connected, driver.status.value.connection)
         assertEquals(RemoteController.None, driver.status.value.controller)

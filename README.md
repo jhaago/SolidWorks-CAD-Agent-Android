@@ -2,7 +2,7 @@
 
 Native Android companion app for `jhaago/SolidWorks-CAD-Agent`. Development remains on `feature/android-v0`; nothing is merged to main.
 
-The app includes Home, Jobs, New Job, Job Detail, Settings and **Remote**. CAD jobs and remote sessions currently use in-memory demo backends. It does not connect to a real PC, SOLIDWORKS, AI provider or printer.
+The app includes Home, Jobs, New Job, Job Detail, Settings and **Remote**. CAD jobs use the in-memory demo backend. Remote supports the labelled demo and a first live Windows viewing/manual-control test build through private HTTPS pairing. Live AI desktop control and printer commands remain unavailable.
 
 ## Try Remote
 
@@ -13,22 +13,22 @@ The app includes Home, Jobs, New Job, Job Detail, Settings and **Remote**. CAD j
 5. The second Agent step pauses for a sample print confirmation. Approve or reject explicitly; dismissing the dialog rejects. Take Control is available inside the dialog too. Approval records a demo decision and never sends a print command.
 6. Disconnect/reconnect to confirm old tasks remain stopped. Home and Jobs continue to work independently.
 
-Instructions do not influence the fixed demonstration sequence. Live desktop viewing, network pairing, Windows input injection and real AI control are future milestones.
+Instructions do not influence the fixed demonstration sequence. For live manual viewing/control, configure the workstation in Settings using the [pairing and Windows setup guide](docs/remote-workstation.md). Real Windows capture/input and mobile-data acceptance still require physical testing.
 
 ## Build and test
 
 Requires JDK 17, Gradle 9.6.0 and Android SDK platform 36 / build-tools 36.0.0. The repository currently uses installed Gradle, matching CI.
 
 ```bash
-gradle testDebugUnitTest assembleDebug assembleDebugAndroidTest
+gradle testDebugUnitTest assembleDebug assembleDebugAndroidTest lintDebug
 gradle connectedDebugAndroidTest # requires an Android device or emulator
 ```
 
 Debug APK: `app/build/outputs/apk/debug/app-debug.apk`. GitHub Actions builds the APK and runs the Remote UI tests on an Android 35 emulator.
 
-## Architecture and next milestone
+## Architecture
 
-CAD screens use `CadAgentRepository`. Remote uses separate session, AI-control, display and input interfaces. The fake session publishes an atomic controller/task snapshot; connection-attempt and task IDs reject late callbacks. The app container survives Activity configuration changes, but demo state is not persisted across process termination.
+CAD screens use `CadAgentRepository`. Remote uses separate session, AI-control, display and input interfaces. The fake session publishes an atomic controller/task snapshot; connection-attempt and task IDs reject late callbacks. The app container survives Activity configuration changes, but sessions start disconnected after process termination. Pairing uses encrypted Android Keystore storage outside backups.
 
 See [Remote Workstation](docs/remote-workstation.md) for guarantees, limitations and the live Windows backend boundary. Authoritative design and plan:
 

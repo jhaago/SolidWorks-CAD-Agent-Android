@@ -156,8 +156,9 @@ class LiveConnectionDriver(
             val state = readSession(JSONObject(transport.call(workstation.endpoint, RemoteOperation("session/heartbeat", "POST", "Session", captured.token)).body))
             synchronized(gate) {
                 if (!current(id) || grant?.token != captured.token) return@synchronized
-                if (state.epoch >= captured.session.epoch) {
-                    if (allowInput && (state.epoch != captured.session.epoch || !state.controlling)) releaseAll()
+                val latestEpoch = grant!!.session.epoch
+                if (state.epoch >= latestEpoch) {
+                    if (allowInput && (state.epoch != latestEpoch || !state.controlling)) releaseAll()
                     grant = Grant(captured.token, state)
                 }
                 if (mutableFrame.value != null && !freshFrame()) {
@@ -240,6 +241,7 @@ class LiveConnectionDriver(
     private fun <T> decode(action: () -> T): T = try { action() } catch (_: Exception) { throw RemoteFailure(0, "invalid_response", "The workstation returned an invalid remote response.") }
     private fun safeMessage(error: Exception) = if (error is RemoteFailure) error.message else "The remote connection failed. Check the Windows control window."
     override fun close() { disconnect(); owned.cancel(); signal.close() }
+    fun canSwitchWorkstation(): Boolean = synchronized(gate) { !wanted && connectionJob?.isActive != true }
     companion object {
         private fun allowedKey(key: String) = (key.length == 1 && (key[0] in 'A'..'Z' || key[0] in '0'..'9')) || key in
             setOf("Enter", "Escape", "Tab", "Space", "Backspace", "Left", "Right", "Up", "Down", "Home", "End", "PageUp", "PageDown", "Shift", "Control", "Alt") || key in (1..12).map { "F$it" }

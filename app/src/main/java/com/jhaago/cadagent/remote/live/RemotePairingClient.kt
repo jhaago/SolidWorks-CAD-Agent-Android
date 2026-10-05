@@ -6,7 +6,8 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 class PairingReceipt(val requestId: String, val secret: String) { override fun toString() = "Pending pairing request" }
-class RemotePairingClient(private val transport: RemoteTransport, private val store: RemoteCredentialStore) {
+class RemotePairingClient(private val transport: RemoteTransport, private val store: RemoteCredentialStore,
+    private val storageDispatcher: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.IO) {
     suspend fun request(endpoint: RemoteEndpoint, secret: String, name: String): PairingReceipt {
         require(name.isNotBlank() && name.length <= 80 && name.none { it.isISOControl() })
         return parse {
@@ -22,7 +23,8 @@ class RemotePairingClient(private val transport: RemoteTransport, private val st
             "pending" -> null
             "approved" -> {
                 val workstation = PairedWorkstation(endpoint, json.requiredString("deviceId", 128), json.requiredString("credential", 256))
-                try { withContext(Dispatchers.IO) { store.write(workstation) } }
+                try { withContext(storageDispatcher) { store.write(workstation) } }
+                catch (error: CancellationException) { throw error }
                 catch (_: Exception) { throw RemoteFailure(0, "storage_failed", "Pairing could not be saved securely. Remove this device on Windows and try pairing again.") }
                 workstation
             }

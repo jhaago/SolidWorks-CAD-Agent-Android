@@ -22,7 +22,7 @@ class WorkstationSettingsTest {
     }
     @Test fun pairingWaitsForWindowsApprovalThenSelectsLiveWithoutChangingCadJobs() = runTest {
         val app = AppContainer(); val jobs = app.repository; val server = Server(); val store = Store()
-        val settings = WorkstationSettingsController(backgroundScope, app, server, store)
+        val settings = WorkstationSettingsController(backgroundScope, app, server, store, storageDispatcher = StandardTestDispatcher(testScheduler))
         settings.changeEndpoint("https://pc.example"); settings.changePairingSecret("secret"); settings.pair(); runCurrent()
         assertTrue(settings.state.value.pairing); assertNull(store.record)
         server.state = "approved"; advanceTimeBy(1501); runCurrent()
@@ -30,14 +30,14 @@ class WorkstationSettingsTest {
         assertSame(jobs, app.repository); assertEquals("", settings.state.value.pairingSecret)
     }
     @Test fun rejectedPairingStaysDisconnectedAndClearsSecret() = runTest {
-        val settings = WorkstationSettingsController(backgroundScope, AppContainer(), Server().apply { state = "rejected" }, Store())
+        val settings = WorkstationSettingsController(backgroundScope, AppContainer(), Server().apply { state = "rejected" }, Store(), storageDispatcher = StandardTestDispatcher(testScheduler))
         settings.changeEndpoint("https://pc.example"); settings.changePairingSecret("secret"); settings.pair(); runCurrent()
         assertFalse(settings.state.value.pairing); assertFalse(settings.state.value.paired)
         assertEquals("", settings.state.value.pairingSecret); assertNotNull(settings.state.value.error)
     }
     @Test fun failedForgetDoesNotClaimCredentialsWereDeleted() = runTest {
         val store = Store().apply { record = PairedWorkstation(RemoteEndpoint.parse("https://pc.example"), "device", "credential"); failDelete = true }
-        val settings = WorkstationSettingsController(backgroundScope, AppContainer(), Server(), store)
+        val settings = WorkstationSettingsController(backgroundScope, AppContainer(), Server(), store, storageDispatcher = StandardTestDispatcher(testScheduler))
         settings.changeEndpoint("https://pc.example"); settings.useSaved(); runCurrent()
         assertTrue(settings.state.value.paired)
         settings.forget(); runCurrent()
@@ -46,7 +46,7 @@ class WorkstationSettingsTest {
     }
     @Test fun cancelledPairingCannotSwitchAdaptersAfterDemoWasSelected() = runTest {
         val app = AppContainer(); val server = Server(); val store = Store()
-        val settings = WorkstationSettingsController(backgroundScope, app, server, store)
+        val settings = WorkstationSettingsController(backgroundScope, app, server, store, storageDispatcher = StandardTestDispatcher(testScheduler))
         settings.changeEndpoint("https://pc.example"); settings.changePairingSecret("secret"); settings.pair(); runCurrent()
         settings.useDemo(); server.state = "approved"; advanceTimeBy(2000); runCurrent()
         assertFalse(app.remoteAdapters.value.session.status.value.isLive)

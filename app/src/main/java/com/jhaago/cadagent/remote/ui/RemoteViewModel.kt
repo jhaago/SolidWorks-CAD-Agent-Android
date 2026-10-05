@@ -6,6 +6,7 @@ import com.jhaago.cadagent.remote.data.*
 import com.jhaago.cadagent.remote.display.*
 import com.jhaago.cadagent.remote.input.*
 import com.jhaago.cadagent.remote.model.*
+import com.jhaago.cadagent.remote.live.LiveRemoteSessionRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
@@ -19,7 +20,7 @@ data class RemoteUiState(
     val inputMessage: String = "Tap or drag the demo display to try manual input",
 ) {
     val connected: Boolean get() = session.connection == RemoteConnectionState.Connected
-    val canRunTask: Boolean get() = connected && session.mode != RemoteControlMode.Manual && !session.task.active && instruction.isNotBlank() && instruction.trim().length <= 2000
+    val canRunTask: Boolean get() = !session.isLive && connected && session.mode != RemoteControlMode.Manual && !session.task.active && instruction.isNotBlank() && instruction.trim().length <= 2000
 }
 private data class EditorState(val instruction: String = "", val error: String? = null, val inputMessage: String = "Tap or drag the demo display to try manual input")
 
@@ -57,10 +58,16 @@ class RemoteViewModel(
     }
 
     fun takeControl() { input.releaseAll(); session.takeControl() }
-    fun stopTask() = takeControl()
+    fun stopTask() { if (session.status.value.isLive) disconnect() else takeControl() }
+    fun setForeground(value: Boolean) {
+        if (session is LiveRemoteSessionRepository) session.setForeground(value)
+        else if (!value) input.releaseAll()
+    }
+    fun cancelInput() = input.releaseAll()
     fun changeInstruction(value: String) { editor.value = editor.value.copy(instruction = value.take(2001), error = null) }
 
     fun runTask() {
+        if (session.status.value.isLive) return
         if (session.status.value.task.active) return
         input.releaseAll()
         if (ai.submitTask(editor.value.instruction) == null) {
@@ -76,7 +83,9 @@ class RemoteViewModel(
         if (!event.valid) return false
         interruptForManualInput()
         val accepted = input.sendPointer(event)
-        editor.value = editor.value.copy(inputMessage = if (accepted) "Demo input: ${event.action} at ${"%.2f".format(event.x)}, ${"%.2f".format(event.y)}" else "Input unavailable: connect and take control")
+        editor.value = editor.value.copy(inputMessage = if (accepted) {
+            if (session.status.value.isLive) "Manual input sent" else "Demo input: ${event.action} at ${"%.2f".format(event.x)}, ${"%.2f".format(event.y)}"
+        } else "Input unavailable: connect and resume control")
         return accepted
     }
 
@@ -84,7 +93,7 @@ class RemoteViewModel(
         if (!event.valid) return false
         interruptForManualInput()
         val accepted = input.sendKeyboard(event)
-        editor.value = editor.value.copy(inputMessage = if (accepted) "Demo keyboard input recorded" else "Input unavailable: connect and take control")
+        editor.value = editor.value.copy(inputMessage = if (accepted) { if (session.status.value.isLive) "Manual key sent" else "Demo keyboard input recorded" } else "Input unavailable: connect and resume control")
         return accepted
     }
 
@@ -96,6 +105,6 @@ class RemoteViewModel(
         connectionJob?.cancel()
         input.releaseAll()
         ai.stopTask()
-        if (session.status.value.connection == RemoteConnectionState.Connecting) session.disconnect()
+        session.disconnect()
     }
 }

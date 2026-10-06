@@ -44,6 +44,8 @@ class LiveConnectionDriver(
     private var inputJob: Job? = null
     private var runtime: CoroutineScope? = null
     private var aiGeneration = 0L
+    private var mutationInFlight = false
+    private var submissionInFlight = false
     private var stopRequestedGeneration: Long? = null
     private val queue = ArrayDeque<QueuedInput>()
     private val signal = Channel<Unit>(Channel.CONFLATED)
@@ -100,6 +102,7 @@ class LiveConnectionDriver(
                     coroutineScope {
                         synchronized(gate) { runtime = this }
                         launch { heartbeatLoop(id) }
+                        launch { agentPollLoop(id) }
                         launch { frameLoop(id) }
                         synchronized(gate) { restartInputWorker(id) }
                         awaitCancellation()
@@ -127,6 +130,10 @@ class LiveConnectionDriver(
     private fun stopConnection(keepWanted: Boolean) {
         if (!keepWanted) wanted = false
         attempt++
+        // In-flight requests belong to the old session. Keep the displayed pending
+        // task guarded until the next host snapshot replaces it on reconnect.
+        mutationInFlight = false
+        submissionInFlight = false
         connectionJob?.cancel()
         connectionJob = null
         controlJob?.cancel()
@@ -169,6 +176,7 @@ class LiveConnectionDriver(
             state.connection != RemoteConnectionState.Connected || state.mode == RemoteControlMode.Manual || state.task.active) return@synchronized null
 
         val generation = ++aiGeneration
+        submissionInFlight = true
         stopRequestedGeneration = null
         val requestId = "pending:${UUID.randomUUID()}"
         mutableStatus.value = state.copy(
@@ -188,6 +196,7 @@ class LiveConnectionDriver(
                         false
                     }
                 }
+                synchronized(gate) { if (generation == aiGeneration) submissionInFlight = false }
                 if (shouldCancel) cancelCreatedJob(id, captured, generation, job)
             } catch (error: CancellationException) { throw error }
             catch (error: Exception) {
@@ -195,15 +204,80 @@ class LiveConnectionDriver(
                     if (generation == aiGeneration) {
                         mutableStatus.value = mutableStatus.value.copy(
                             controller = RemoteController.None,
-                            task = mutableStatus.value.task.copy(phase = AiTaskPhase.Stopped, message = safeAgentMessage(error)),
+                            task = mutableStatus.value.task.copy(phase = if (stopRequestedGeneration == generation) AiTaskPhase.Stopping else AiTaskPhase.Running, message = "Submission result is uncertain. Checking the workstation…"),
                             message = safeAgentMessage(error),
                         )
-                        stopRequestedGeneration = null
+                        submissionInFlight = false
                     }
                 }
             }
         }
         requestId
+    }
+
+    fun approvePlan(): Boolean = mutateJob("approve", { it.canApprove }) { mapOf("revisionId" to it.revisionId) }
+    fun requestChanges(instructions: String): Boolean {
+        val text = instructions.trim()
+        if (text.isBlank() || text.length > 2000) return false
+        return mutateJob("request-changes", { it.canRevise }) { mapOf("revisionId" to it.revisionId, "instructions" to text) }
+    }
+    fun completeTask(): Boolean = mutateJob("complete", { it.canComplete }) { emptyMap() }
+
+    private fun mutateJob(route: String, allowed: (AiTaskState) -> Boolean, payload: (AiTaskState) -> Map<String, Any?>): Boolean = synchronized(gate) {
+        val snapshot = mutableStatus.value.task
+        val captured = grant ?: return@synchronized false
+        val jobId = snapshot.id ?: return@synchronized false
+        if (!foreground || mutableStatus.value.connection != RemoteConnectionState.Connected || mutationInFlight || !allowed(snapshot)) return@synchronized false
+        val id = attempt
+        val generation = aiGeneration
+        mutationInFlight = true
+        mutableStatus.value = mutableStatus.value.copy(task = snapshot.copy(actionPending = true), message = "Sending job action…")
+        work.launch {
+            try {
+                val job = readJob(transport.call(workstation.endpoint, RemoteOperation("agent/jobs/$jobId/$route", "POST", "Session", captured.token, payload(snapshot))).body)
+                synchronized(gate) {
+                    if (!current(id) || grant?.token != captured.token || generation != aiGeneration || mutableStatus.value.task.id != jobId) return@synchronized
+                    mutationInFlight = false
+                    // An accepted plan action runs in the host background; polling follows its durable state.
+                    if (mutableStatus.value.task.phase != AiTaskPhase.Stopping) applyJob(job, generation)
+                }
+            } catch (error: CancellationException) { throw error }
+            catch (error: Exception) {
+                synchronized(gate) {
+                    if (current(id) && grant?.token == captured.token && generation == aiGeneration && mutableStatus.value.task.id == jobId)
+                        mutableStatus.value = mutableStatus.value.copy(message = safeAgentMessage(error))
+                }
+            } finally {
+                synchronized(gate) {
+                    if (current(id) && grant?.token == captured.token && generation == aiGeneration && mutableStatus.value.task.id == jobId) {
+                        mutationInFlight = false
+                        mutableStatus.value = mutableStatus.value.copy(task = mutableStatus.value.task.copy(actionPending = false))
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    suspend fun downloadArtifact(): AiArtifact? {
+        val dispatch = synchronized(gate) {
+            val snapshot = mutableStatus.value.task
+            val captured = grant ?: return null
+            if (snapshot.phase !in setOf(AiTaskPhase.ReadyForReview, AiTaskPhase.Completed) || snapshot.outputPath == null) return null
+            Triple(attempt, captured, snapshot.id ?: return null)
+        }
+        val response = transport.call(workstation.endpoint, RemoteOperation("agent/jobs/${dispatch.third}/artifact", "GET", "Session", dispatch.second.token))
+        val artifact = decode {
+            val json = JSONObject(response.body)
+            val name = json.requiredString("fileName", 128)
+            require(name.matches(Regex("[A-Za-z0-9][A-Za-z0-9 ._-]*\\.([sS][lL][dD][pP][rR][tT])")) && !name.contains(".."))
+            val bytes = Base64.getDecoder().decode(json.requiredString("base64", 5592408))
+            require(bytes.size in 1..4194304 && json.getLong("byteLength") == bytes.size.toLong())
+            AiArtifact(name, bytes)
+        }
+        return synchronized(gate) {
+            if (current(dispatch.first) && grant?.token == dispatch.second.token && mutableStatus.value.task.id == dispatch.third) artifact else null
+        }
     }
 
     fun stopAiTask() {
@@ -227,6 +301,9 @@ class LiveConnectionDriver(
 
     private suspend fun cancelCreatedJob(id: Long, captured: Grant, generation: Long, job: AiTaskState) {
         val jobId = job.id ?: return
+        synchronized(gate) {
+            if (generation == aiGeneration && current(id)) mutableStatus.value = mutableStatus.value.copy(task = job.copy(phase = AiTaskPhase.Stopping))
+        }
         cancelKnownJob(id, captured, generation, jobId)
     }
 
@@ -237,10 +314,10 @@ class LiveConnectionDriver(
                 if (!current(id) || grant?.token != captured.token || generation != aiGeneration) return@synchronized
                 mutableStatus.value = mutableStatus.value.copy(
                     controller = RemoteController.None,
-                    task = cancelled.copy(phase = AiTaskPhase.Stopped, message = "CAD task cancelled"),
-                    message = "CAD task cancellation confirmed.",
+                    task = if (!cancelled.active) cancelled else cancelled.copy(phase = AiTaskPhase.Stopping, message = "Cancellation not yet confirmed"),
+                    message = if (!cancelled.active) "CAD task cancellation confirmed." else "Waiting for the workstation to confirm cancellation…",
                 )
-                stopRequestedGeneration = null
+                if (!cancelled.active) stopRequestedGeneration = null
             }
         } catch (error: CancellationException) { throw error }
         catch (error: Exception) {
@@ -356,6 +433,12 @@ class LiveConnectionDriver(
                     mutableStatus.value = mutableStatus.value.copy(message = "Desktop image is stale. Waiting for a current view.")
                 }
             }
+        }
+    }
+
+    private suspend fun agentPollLoop(id: Long) {
+        while (current(id)) {
+            delay(1000)
             try {
                 val latest = synchronized(gate) { grant } ?: return
                 refreshAgentStatus(id, latest)
@@ -373,10 +456,12 @@ class LiveConnectionDriver(
         synchronized(gate) {
             if (!current(id) || grant?.token != captured.token) return@synchronized
             val currentTask = mutableStatus.value.task
-            val pendingLocal = currentTask.id?.startsWith("pending:") == true || currentTask.phase == AiTaskPhase.Stopping
             val remoteTask = runtime.activeJob
+            val recoveringSubmission = currentTask.id?.startsWith("pending:") == true && !submissionInFlight && remoteTask?.instruction == currentTask.instruction
+            val pendingLocal = (currentTask.id?.startsWith("pending:") == true || currentTask.phase == AiTaskPhase.Stopping || mutationInFlight) && !recoveringSubmission
             val nextMode = if (!pendingLocal && remoteTask?.active == true && mutableStatus.value.mode == RemoteControlMode.Manual) RemoteControlMode.Agent else mutableStatus.value.mode
-            val nextTask = if (!pendingLocal && remoteTask != null) remoteTask else currentTask
+            val nextTask = if (recoveringSubmission && stopRequestedGeneration != null && remoteTask != null) remoteTask.copy(phase = AiTaskPhase.Stopping)
+                else if (!pendingLocal && remoteTask != null && (remoteTask.id != currentTask.id || (remoteTask.revisionNumber ?: 0) >= (currentTask.revisionNumber ?: 0))) remoteTask else currentTask
             mutableStatus.value = mutableStatus.value.copy(
                 agentHostAvailable = runtime.available,
                 executionMode = runtime.executionMode,
@@ -390,6 +475,10 @@ class LiveConnectionDriver(
                 controller = if (nextTask.active && nextMode == RemoteControlMode.Agent) RemoteController.Ai else mutableStatus.value.controller,
                 task = nextTask,
             )
+            if (recoveringSubmission && stopRequestedGeneration != null && remoteTask?.id != null) {
+                val generation = aiGeneration
+                work.launch { cancelKnownJob(id, captured, generation, remoteTask.id) }
+            }
         }
     }
 
@@ -399,14 +488,15 @@ class LiveConnectionDriver(
         if (!snapshot.active) return
         val job = readJob(transport.call(workstation.endpoint, RemoteOperation("agent/jobs/$jobId", "GET", "Session", captured.token)).body)
         synchronized(gate) {
-            if (!current(id) || grant?.token != captured.token || snapshot.id != mutableStatus.value.task.id || snapshot.phase == AiTaskPhase.Stopping) return@synchronized
+            if (!current(id) || grant?.token != captured.token || snapshot.id != mutableStatus.value.task.id) return@synchronized
+            if (mutableStatus.value.task.phase == AiTaskPhase.Stopping && job.active) return@synchronized
             applyJob(job, aiGeneration)
         }
     }
 
     private fun markAgentUnavailable(id: Long, captured: Grant) = synchronized(gate) {
         if (!current(id) || grant?.token != captured.token) return@synchronized
-        mutableStatus.value = mutableStatus.value.copy(agentHostAvailable = false)
+        mutableStatus.value = mutableStatus.value.copy(message = "Workstation status is delayed. Waiting for the next update.")
     }
 
     private fun applyJob(job: AiTaskState, generation: Long) {
@@ -414,7 +504,7 @@ class LiveConnectionDriver(
         val mode = mutableStatus.value.mode
         mutableStatus.value = mutableStatus.value.copy(
             controller = if (job.active && mode == RemoteControlMode.Agent) RemoteController.Ai else RemoteController.None,
-            task = job,
+            task = job.copy(actionPending = mutationInFlight),
             message = job.message,
         )
         if (!job.active) stopRequestedGeneration = null
@@ -551,14 +641,17 @@ class LiveConnectionDriver(
         val prompt = json.requiredString("prompt", 2000)
         val state = json.requiredString("state", 64)
         val phase = when (state) {
+            "AwaitingClarification" -> AiTaskPhase.AwaitingClarification
+            "AwaitingApproval" -> AiTaskPhase.AwaitingApproval
+            "ReadyForReview" -> AiTaskPhase.ReadyForReview
             "Completed" -> AiTaskPhase.Completed
             "Cancelled", "Failed" -> AiTaskPhase.Stopped
             else -> AiTaskPhase.Running
         }
         val message = when (state) {
             "New", "Interpreting" -> "Planning CAD task…"
-            "AwaitingClarification" -> "CAD task needs clarification on the PC"
-            "AwaitingApproval" -> "CAD plan is awaiting approval on the PC"
+            "AwaitingClarification" -> "CAD task needs clarification"
+            "AwaitingApproval" -> "Review and approve the current CAD plan"
             "Approved" -> "CAD plan approved"
             "Executing" -> "Executing CAD task…"
             "Verifying" -> "Verifying CAD changes…"
@@ -568,7 +661,37 @@ class LiveConnectionDriver(
             "Failed" -> "CAD task failed"
             else -> "CAD task: $state"
         }
-        return AiTaskState(id = id, instruction = prompt, phase = phase, message = message)
+        val revisionId = json.optionalString("currentRevisionId", 128)?.also { UUID.fromString(it) }
+        val plan = json.optJSONObject("plan")
+        fun strings(name: String): List<String> {
+            val values = plan?.optJSONArray(name) ?: plan?.optJSONArray(name.replaceFirstChar { it.uppercase() }) ?: return emptyList()
+            require(values.length() <= 100)
+            return (0 until values.length()).map { index ->
+                val command = if (name == "proposedCommands") values.optJSONObject(index) else null
+                val text = if (command != null) "${command.requiredString("Command", 256)} ${command.optJSONObject("Parameters") ?: "{}"}" else values.getString(index)
+                require(text.length <= 8000)
+                text
+            }
+        }
+        val checks = json.optJSONArray("verifications")
+        require((checks?.length() ?: 0) <= 100)
+        val verifications = (0 until (checks?.length() ?: 0)).mapNotNull { index ->
+            val check = checks!!.getJSONObject(index)
+            if (json.has("currentRevisionNumber") && !json.isNull("currentRevisionNumber") && check.optInt("revisionNumber") != json.optInt("currentRevisionNumber")) return@mapNotNull null
+            AiVerification(check.requiredString("checkName", 256), check.getBoolean("passed"), check.optionalJsonText("expected", 8000), check.optionalJsonText("actual", 8000))
+        }
+        val commands = json.optJSONArray("commands")
+        val saveResult = (0 until (commands?.length() ?: 0)).mapNotNull { index ->
+            val command = commands!!.getJSONObject(index)
+            if (command.optBoolean("success") && (json.isNull("currentRevisionNumber") || command.optInt("revisionNumber") == json.optInt("currentRevisionNumber")) && command.optString("commandName") in setOf("SavePart", "SaveDocument")) command.optJSONObject("result")?.optionalString("path", 8000) else null
+        }.lastOrNull()
+        val ambiguities = strings("ambiguities").toMutableList()
+        if (json.optBoolean("hasUnresolvedAmbiguity") && ambiguities.isEmpty()) ambiguities += json.optionalString("ambiguityMessage", 8000) ?: "Clarification is required before approval."
+        return AiTaskState(id = id, instruction = prompt, phase = phase, message = message,
+            revisionId = revisionId, revisionNumber = if (json.isNull("currentRevisionNumber") || !json.has("currentRevisionNumber")) null else json.getInt("currentRevisionNumber"),
+            summary = plan?.optionalString("summary", 8000) ?: plan?.optionalString("Summary", 8000), assumptions = strings("assumptions"), ambiguities = ambiguities,
+            proposedCommands = strings("proposedCommands"), verifications = verifications,
+            outputPath = json.optionalString("outputPath", 8000) ?: saveResult, planValidated = json.optBoolean("planValidated"))
     }
 
     private fun readFrame(body: String): Pair<RemoteDisplayFrame, Long> = decode {
@@ -588,6 +711,11 @@ class LiveConnectionDriver(
         require(x.isFinite() && y.isFinite() && x in 0.0..1.0 && y in 0.0..1.0)
         OffsetDateTime.parse(json.requiredString("capturedAt", 128))
         RemoteDisplayFrame(width, height, "Live workstation", bytes, generation, frameId, x.toFloat(), y.toFloat()).also { require(validateImage(it)) } to age
+    }
+
+    private fun JSONObject.optionalJsonText(name: String, maxLength: Int): String? {
+        if (!has(name) || isNull(name)) return null
+        return get(name).toString().also { require(it.length <= maxLength) }
     }
 
     private fun JSONObject.optionalString(name: String, maxLength: Int): String? {

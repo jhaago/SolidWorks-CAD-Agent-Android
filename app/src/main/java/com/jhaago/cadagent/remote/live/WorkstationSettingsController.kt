@@ -31,7 +31,6 @@ class WorkstationSettingsController(
         if (!mutable.value.pairing) mutable.value = mutable.value.copy(pairingSecret = value.take(256), error = null)
     }
     fun cancelPairing() { revision++; job?.cancel(); job = null; mutable.value = mutable.value.copy(pairing = false, pairingSecret = "", message = null) }
-    fun useDemo() { if (!editable()) return; cancelPairing(); container.selectDemo(); mutable.value = mutable.value.copy(error = null, message = "Demo selected. CAD jobs are simulated.") }
     fun pair() {
         if (!editable() || mutable.value.pairing) return
         val endpoint = endpoint() ?: return
@@ -74,7 +73,11 @@ class WorkstationSettingsController(
             try {
                 withContext(storageDispatcher) { store.delete(endpoint) }
                 if (id == revision) {
-                    container.selectDemo(); saveOrigin("")
+                    if (!container.selectUnpaired()) {
+                        failure("Saved pairing was removed, but Remote is still active. Disconnect Remote before clearing this workstation.")
+                        return@launch
+                    }
+                    saveOrigin("")
                     mutable.value = mutable.value.copy(paired = false, error = null, message = "Saved pairing removed. Remove this Android device in Windows too.")
                 }
             } catch (error: CancellationException) { throw error }

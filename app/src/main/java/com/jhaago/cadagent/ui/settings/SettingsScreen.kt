@@ -23,20 +23,16 @@ fun SettingsScreen(
 
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Current mode", style = MaterialTheme.typography.titleMedium)
-                Text("Simulated CAD Agent")
-                Text(
-                    "This first Android milestone uses local in-memory job data. It does not connect to your Windows PC or SOLIDWORKS yet.",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+                Text("Workstation pairing", style = MaterialTheme.typography.titleMedium)
+                Text("Pair a Windows workstation to enable live remote access.", style = MaterialTheme.typography.bodyMedium)
             }
         }
 
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Future remote connection", style = MaterialTheme.typography.titleMedium)
+                Text("Remote connection", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "Remote pairing is intentionally not configured in this build. A separate security milestone will add authenticated HTTPS pairing to a trusted Windows-side gateway before live remote control is enabled.",
+                    "Configure the HTTPS workstation address and one-time pairing code in the Remote workstation settings.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }

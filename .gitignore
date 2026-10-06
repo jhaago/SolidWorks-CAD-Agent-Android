@@ -1,6 +1,7 @@
 
 .superpowers/
 .gradle/
+.gradle-home-local/
 .kotlin/
 local.properties
 **/build/

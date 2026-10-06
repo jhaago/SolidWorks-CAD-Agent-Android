@@ -2,11 +2,15 @@ package com.jhaago.cadagent.remote.ui
 
 import com.jhaago.cadagent.remote.data.*
 import com.jhaago.cadagent.remote.display.FakeRemoteDisplaySource
+import com.jhaago.cadagent.remote.display.RemoteDisplayFrame
+import com.jhaago.cadagent.remote.display.RemoteDisplaySource
 import com.jhaago.cadagent.remote.input.*
 import com.jhaago.cadagent.remote.model.*
 import com.jhaago.cadagent.test.MainDispatcherRule
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -21,12 +25,12 @@ class RemoteViewModelTest {
         assertEquals(RemoteConnectionState.Disconnected, vm.uiState.value.session.connection)
         vm.connect(); vm.connect()
         assertEquals(RemoteConnectionState.Connecting, vm.uiState.value.session.connection)
-        advanceTimeBy(500); runCurrent()
+        assertTrue(session.finishConnecting(1L))
         assertEquals(RemoteConnectionState.Connected, vm.uiState.value.session.connection)
         vm.disconnect()
         vm.connect()
         vm.disconnect()
-        advanceUntilIdle()
+        assertFalse(session.finishConnecting(2L))
         assertEquals(RemoteConnectionState.Disconnected, vm.uiState.value.session.connection)
     }
 
@@ -60,7 +64,8 @@ class RemoteViewModelTest {
         val vm = viewModel(session)
         vm.selectMode(RemoteControlMode.Agent)
         vm.changeInstruction("Prepare model"); vm.runTask()
-        vm.advanceDemoTask(); vm.advanceDemoTask()
+        val ai = FakeAiControlRepository(session)
+        ai.advanceTask(vm.uiState.value.session.task.id!!); ai.advanceTask(vm.uiState.value.session.task.id!!)
         val request = vm.uiState.value.session.protectedAction!!
         assertEquals(ProtectedActionDisposition.Pending, request.disposition)
         vm.disconnect()
@@ -70,11 +75,13 @@ class RemoteViewModelTest {
     }
 
     @Test fun `assist task shows suggestions while leaving manual authority`() {
-        val vm = viewModel(connected())
+        val session = connected()
+        val ai = FakeAiControlRepository(session)
+        val vm = viewModel(session)
         vm.selectMode(RemoteControlMode.Assist)
         vm.changeInstruction("Explain desktop"); vm.runTask()
         assertEquals(RemoteController.User, vm.uiState.value.session.controller)
-        vm.advanceDemoTask()
+        ai.advanceTask(vm.uiState.value.session.task.id!!)
         assertEquals(AiTaskPhase.Completed, vm.uiState.value.session.task.phase)
         assertNull(vm.uiState.value.session.protectedAction)
     }
@@ -99,7 +106,43 @@ class RemoteViewModelTest {
         assertEquals(RemoteConnectionState.Disconnected, session.status.value.connection)
     }
 
+    @Test fun `viewmodel disposal leaves durable workstation job running`() {
+        val active = RemoteWorkstationStatus(connection = RemoteConnectionState.Connected, isLive = true,
+            task = AiTaskState(id = "job-1", instruction = "Build bracket", phase = AiTaskPhase.Running))
+        val statusFlow = MutableStateFlow(active)
+        var disconnects = 0
+        var stops = 0
+        val session = object : RemoteSessionRepository {
+            override val status: StateFlow<RemoteWorkstationStatus> = statusFlow
+            override fun connect(): Long? = null
+            override fun disconnect() { disconnects++ }
+            override fun setMode(mode: RemoteControlMode) = Unit
+            override fun takeControl() = Unit
+        }
+        val ai = object : AiControlRepository {
+            override val status: StateFlow<RemoteWorkstationStatus> = statusFlow
+            override fun submitTask(instruction: String): String? = null
+            override fun stopTask() { stops++ }
+            override fun approveProtectedAction(id: String) = false
+            override fun rejectProtectedAction(id: String) = false
+        }
+        val display = object : RemoteDisplaySource {
+            override val frame: StateFlow<RemoteDisplayFrame?> = MutableStateFlow(null)
+        }
+        val input = object : RemoteInputController {
+            override fun sendPointer(event: RemotePointerEvent) = false
+            override fun sendKeyboard(event: RemoteKeyboardEvent) = false
+            override fun releaseAll() = Unit
+        }
+        val vm = RemoteViewModel(session, ai, display, input)
+        val store = androidx.lifecycle.ViewModelStore(); store.put("remote", vm); store.clear()
+
+        assertEquals(1, disconnects)
+        assertEquals(0, stops)
+        assertTrue(statusFlow.value.task.active)
+    }
+
     private fun connected() = FakeRemoteSessionRepository().also { it.finishConnecting(it.connect()!!) }
     private fun viewModel(session: FakeRemoteSessionRepository, input: FakeRemoteInputController = FakeRemoteInputController(session)) =
-        RemoteViewModel(session, FakeAiControlRepository(session), FakeRemoteDisplaySource(), input, FakeRemoteDemoDriver(session, FakeAiControlRepository(session)))
+        RemoteViewModel(session, FakeAiControlRepository(session), FakeRemoteDisplaySource(), input)
 }

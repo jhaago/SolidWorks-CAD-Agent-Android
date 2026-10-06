@@ -26,6 +26,10 @@ class LiveAiControlRepository(private val driver: LiveConnectionDriver) : AiCont
     override val status = driver.status
     override fun submitTask(instruction: String) = driver.submitAiTask(instruction)
     override fun stopTask() = driver.stopAiTask()
+    override fun approvePlan() = driver.approvePlan()
+    override fun requestChanges(instructions: String) = driver.requestChanges(instructions)
+    override fun completeTask() = driver.completeTask()
+    override suspend fun downloadArtifact() = driver.downloadArtifact()
     override fun approveProtectedAction(id: String) = false
     override fun rejectProtectedAction(id: String) = false
 }

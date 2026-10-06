@@ -15,11 +15,11 @@ fun ProtectedActionDialog(request: ProtectedActionRequest, onApprove: (String) -
         title = { Text("Approve starting a print?") },
         text = {
             Column {
-                Text("The task is paused. Starting a physical 3D print requires your explicit approval.\n\nSimulation only: no printer is connected and no print command will be sent.")
+                Text("The task is paused. Starting a physical 3D print requires your explicit approval.")
                 TextButton(onClick = onTakeControl, modifier = Modifier.testTag("dialog-take-control")) { Text("Take Control") }
             }
         },
-        confirmButton = { TextButton(onClick = { onApprove(request.id) }, modifier = Modifier.testTag("approve-protected-action")) { Text("Approve demo") } },
+        confirmButton = { TextButton(onClick = { onApprove(request.id) }, modifier = Modifier.testTag("approve-protected-action")) { Text("Approve") } },
         dismissButton = { TextButton(onClick = { onReject(request.id) }, modifier = Modifier.testTag("reject-protected-action")) { Text("Reject") } },
     )
 }

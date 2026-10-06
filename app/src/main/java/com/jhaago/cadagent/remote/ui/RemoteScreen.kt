@@ -4,16 +4,25 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.jhaago.cadagent.remote.input.*
 import com.jhaago.cadagent.remote.model.*
 import com.jhaago.cadagent.remote.ui.components.*
 
 @Composable
 fun RemoteScreen(state: RemoteUiState, actions: RemoteViewModel) {
-    var key by remember { mutableStateOf("Enter") }
+    var fullScreen by rememberSaveable { mutableStateOf(false) }
+    var control by remember { mutableStateOf(false) }
+    var viewResetKey by remember { mutableIntStateOf(0) }
+    LaunchedEffect(state.connected) { if (!state.connected) fullScreen = false }
+    val available = state.connected && (!state.session.isLive || state.session.controller == RemoteController.User) && !state.session.task.active && !state.session.controlPending
+    LaunchedEffect(available) { if (!available) { control = false; actions.cancelInput() } }
+    fun changeControl(value: Boolean) { actions.cancelInput(); control = value && available }
     Column(Modifier.fillMaxSize().testTag("remote-screen")) {
         Text("Remote workstation", Modifier.padding(start = 20.dp, top = 16.dp, bottom = 8.dp), style = MaterialTheme.typography.headlineSmall)
         RemoteControlBar(state.session, actions::takeControl, actions::stopTask, state.frame != null)
@@ -25,11 +34,11 @@ fun RemoteScreen(state: RemoteUiState, actions: RemoteViewModel) {
             item {
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(if (state.session.isLive) "Live · private HTTPS workstation" else "Simulation · no live PC connection", style = MaterialTheme.typography.titleMedium)
+                        Text(if (state.session.isLive) "Live · private HTTPS workstation" else "No live workstation selected", style = MaterialTheme.typography.titleMedium)
                         Text("${state.session.workstationName} · ${state.session.connection}", Modifier.testTag("connection-status"))
-                        if (state.session.connection == RemoteConnectionState.Disconnected) {
+                        if (state.session.isLive && state.session.connection == RemoteConnectionState.Disconnected) {
                             Button(onClick = actions::connect, modifier = Modifier.testTag("connect-remote")) {
-                                Text(if (state.session.isLive) "Connect live workstation" else "Connect demo")
+                                Text("Connect live workstation")
                             }
                         } else {
                             OutlinedButton(
@@ -55,7 +64,7 @@ fun RemoteScreen(state: RemoteUiState, actions: RemoteViewModel) {
                             state.session.solidWorksVersion?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                             Text("Document: ${state.session.activeDocument ?: "No active document reported"}", Modifier.testTag("active-document"), style = MaterialTheme.typography.bodySmall)
                         } else if (!state.session.isLive) {
-                            Text("CAD jobs remain available in Home and Jobs.", style = MaterialTheme.typography.bodySmall)
+                            Text("Pair a workstation in Settings before connecting.", Modifier.testTag("unpaired-workstation"), style = MaterialTheme.typography.bodySmall)
                         }
                         state.session.message?.let { Text(it) }
                     }
@@ -79,37 +88,39 @@ fun RemoteScreen(state: RemoteUiState, actions: RemoteViewModel) {
                     RemoteDisplaySurface(
                         state.frame,
                         actions::pointer,
-                        (!state.session.isLive || state.session.controller == RemoteController.User) && !state.session.task.active,
+                        control && available,
                         actions::cancelInput,
+                        viewResetKey = viewResetKey,
                     )
                 }
                 item {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(state.inputMessage, style = MaterialTheme.typography.bodySmall)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick = { actions.pointer(RemotePointerEvent(PointerAction.Click, .5f, .5f, PointerButton.Secondary)) }) { Text("Right click") }
-                            OutlinedButton(onClick = { actions.pointer(RemotePointerEvent(PointerAction.Scroll, .5f, .5f, scrollY = -1f)) }) { Text("Scroll ↑") }
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedTextField(
-                                value = key,
-                                onValueChange = { key = it.take(64) },
-                                label = { Text("Key, e.g. Enter") },
-                                singleLine = true,
-                                modifier = Modifier.weight(1f),
-                            )
-                            TextButton(
-                                onClick = {
-                                    actions.keyboard(RemoteKeyboardEvent(key, KeyAction.Down))
-                                    actions.keyboard(RemoteKeyboardEvent(key, KeyAction.Up))
-                                },
-                                enabled = key.isNotBlank() && !state.session.task.active,
-                            ) { Text("Send key") }
-                        }
-                    }
+                    OutlinedButton(onClick = { actions.cancelInput(); fullScreen = true }, modifier = Modifier.testTag("enter-full-screen")) { Text("Full screen") }
+                    DesktopControls(control, available, ::changeControl, state.frame.cursorX, state.frame.cursorY, actions::pointer, actions::keyboard)
+                    TextButton(onClick = { actions.cancelInput(); viewResetKey++ }) { Text("Fit desktop") }
+                    Text(state.inputMessage, style = MaterialTheme.typography.bodySmall)
                 }
             }
-            item { AiTaskPanel(state, actions::changeInstruction, actions::runTask, actions::advanceDemoTask) }
+            if (state.session.isLive) {
+                item { AiTaskPanel(state, actions::changeInstruction, actions::runTask, onApprove = actions::approvePlan, onRequestChanges = actions::requestChanges, onComplete = actions::completeTask, onDownload = actions::downloadArtifact, onArtifactSaved = actions::artifactSaved) }
+            }
+        }
+    }
+    if (fullScreen && state.connected && state.frame != null) {
+        Dialog(onDismissRequest = { actions.cancelInput(); fullScreen = false }, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+            Surface(Modifier.fillMaxSize().testTag("full-screen-desktop")) {
+                Column(Modifier.fillMaxSize().safeDrawingPadding()) {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                        TextButton(onClick = { actions.cancelInput(); fullScreen = false }, modifier = Modifier.testTag("exit-full-screen")) { Text("Exit") }
+                        TextButton(onClick = { actions.cancelInput(); viewResetKey++ }) { Text("Fit") }
+                        TextButton(onClick = actions::stopTask, enabled = state.session.task.active, modifier = Modifier.testTag("fullscreen-stop-ai")) { Text("Stop AI") }
+                        TextButton(onClick = { actions.cancelInput(); actions.disconnect() }, modifier = Modifier.testTag("fullscreen-stop-remote")) { Text("Stop Remote") }
+                    }
+                    Text("${state.session.connection} · ${state.session.controller} · ${if (control && available) "Control" else "View"}", Modifier.padding(horizontal = 12.dp), style = MaterialTheme.typography.labelSmall)
+                    RemoteDisplaySurface(state.frame, actions::pointer, control && available, actions::cancelInput, Modifier.weight(1f).fillMaxWidth(), fullScreen = true, viewResetKey = viewResetKey)
+                    DesktopControls(control, available, ::changeControl, state.frame.cursorX, state.frame.cursorY, actions::pointer, actions::keyboard)
+                    if (!available && state.connected) TextButton(onClick = actions::takeControl, enabled = !state.session.task.active && !state.session.controlPending) { Text("Resume Control") }
+                }
+            }
         }
     }
     state.session.protectedAction?.takeIf { it.disposition == ProtectedActionDisposition.Pending }?.let {

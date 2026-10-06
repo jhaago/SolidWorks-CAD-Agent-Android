@@ -2,13 +2,12 @@ package com.jhaago.cadagent.remote.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.jhaago.cadagent.remote.data.*
+import com.jhaago.cadagent.remote.data.AiControlRepository
+import com.jhaago.cadagent.remote.data.RemoteSessionRepository
 import com.jhaago.cadagent.remote.display.*
 import com.jhaago.cadagent.remote.input.*
 import com.jhaago.cadagent.remote.model.*
 import com.jhaago.cadagent.remote.live.LiveRemoteSessionRepository
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -17,7 +16,9 @@ data class RemoteUiState(
     val frame: RemoteDisplayFrame? = null,
     val instruction: String = "",
     val error: String? = null,
-    val inputMessage: String = "Tap or drag the demo display to try manual input",
+    val inputMessage: String = "Tap or drag the display to use manual input",
+    val artifact: AiArtifact? = null,
+    val downloadingArtifact: Boolean = false,
 ) {
     val connected: Boolean get() = session.connection == RemoteConnectionState.Connected
     val canRunTask: Boolean get() = connected && session.mode != RemoteControlMode.Manual && !session.task.active &&
@@ -27,7 +28,9 @@ data class RemoteUiState(
 private data class EditorState(
     val instruction: String = "",
     val error: String? = null,
-    val inputMessage: String = "Tap or drag the demo display to try manual input",
+    val inputMessage: String = "Tap or drag the display to use manual input",
+    val artifact: AiArtifact? = null,
+    val downloadingArtifact: Boolean = false,
 )
 
 class RemoteViewModel(
@@ -35,21 +38,14 @@ class RemoteViewModel(
     private val ai: AiControlRepository,
     display: RemoteDisplaySource,
     private val input: RemoteInputController,
-    private val demo: RemoteDemoDriver? = null,
 ) : ViewModel() {
     private val editor = MutableStateFlow(EditorState())
-    private var connectionJob: Job? = null
     val uiState: StateFlow<RemoteUiState> = combine(session.status, display.frame, editor) { state, frame, edit ->
-        RemoteUiState(state, frame, edit.instruction, edit.error, edit.inputMessage)
+        RemoteUiState(state, frame, edit.instruction, edit.error, edit.inputMessage, edit.artifact, edit.downloadingArtifact)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, RemoteUiState())
 
     fun connect() {
-        val attempt = session.connect() ?: return
-        connectionJob?.cancel()
-        if (demo != null) connectionJob = viewModelScope.launch {
-            delay(400)
-            demo.finishConnecting(attempt)
-        }
+        session.connect()
     }
 
     fun disconnect() {
@@ -58,7 +54,6 @@ class RemoteViewModel(
             editor.value = editor.value.copy(error = "Stop the CAD task before disconnecting so it is not left running on the PC.")
             return
         }
-        connectionJob?.cancel()
         input.releaseAll()
         session.disconnect()
     }
@@ -72,9 +67,6 @@ class RemoteViewModel(
     fun takeControl() {
         if (session.status.value.task.active) {
             ai.stopTask()
-            // Demo cancellation is synchronous, so preserve one-tap takeover there.
-            // Live cancellation remains active in Stopping until the PC confirms it,
-            // which deliberately blocks manual authority and input.
             if (session.status.value.task.active) return
         }
         input.releaseAll()
@@ -82,6 +74,25 @@ class RemoteViewModel(
     }
 
     fun stopTask() = ai.stopTask()
+    fun approvePlan() { editor.value = editor.value.copy(error = if (ai.approvePlan()) null else "Wait for a validated current plan before approving.") }
+    fun requestChanges(instructions: String) {
+        if (!ai.requestChanges(instructions)) editor.value = editor.value.copy(error = "Enter 1–2000 characters against the current revision.")
+        else editor.value = editor.value.copy(error = null)
+    }
+    fun completeTask() { editor.value = editor.value.copy(error = if (ai.completeTask()) null else "Wait for the job to be ready for review.") }
+    fun downloadArtifact() {
+        if (editor.value.downloadingArtifact) return
+        editor.value = editor.value.copy(downloadingArtifact = true, error = null)
+        viewModelScope.launch {
+            try {
+                val artifact = ai.downloadArtifact()
+                editor.value = editor.value.copy(artifact = artifact, error = if (artifact == null) "No native file is available for this job." else null)
+            } catch (error: kotlinx.coroutines.CancellationException) { throw error }
+            catch (error: Exception) { editor.value = editor.value.copy(error = "The native file could not be downloaded. Refresh the job and try again.") }
+            finally { editor.value = editor.value.copy(downloadingArtifact = false) }
+        }
+    }
+    fun artifactSaved(message: String?) { editor.value = editor.value.copy(artifact = null, error = message) }
 
     fun setForeground(value: Boolean) {
         if (session is LiveRemoteSessionRepository) session.setForeground(value)
@@ -104,7 +115,6 @@ class RemoteViewModel(
         }
     }
 
-    fun advanceDemoTask() { session.status.value.task.id?.let { demo?.advanceTask(it) } }
     fun approve(id: String) { ai.approveProtectedAction(id) }
     fun reject(id: String) { ai.rejectProtectedAction(id) }
 
@@ -112,9 +122,7 @@ class RemoteViewModel(
         if (!event.valid) return false
         val ready = interruptForManualInput()
         val accepted = ready && input.sendPointer(event)
-        editor.value = editor.value.copy(inputMessage = if (accepted) {
-            if (session.status.value.isLive) "Manual input sent" else "Demo input: ${event.action} at ${"%.2f".format(event.x)}, ${"%.2f".format(event.y)}"
-        } else "Input unavailable: connect, stop any AI task, and resume control")
+        editor.value = editor.value.copy(inputMessage = if (accepted) "Manual input sent" else "Input unavailable: connect, stop any AI task, and resume control")
         return accepted
     }
 
@@ -122,9 +130,7 @@ class RemoteViewModel(
         if (!event.valid) return false
         val ready = interruptForManualInput()
         val accepted = ready && input.sendKeyboard(event)
-        editor.value = editor.value.copy(inputMessage = if (accepted) {
-            if (session.status.value.isLive) "Manual key sent" else "Demo keyboard input recorded"
-        } else "Input unavailable: connect, stop any AI task, and resume control")
+        editor.value = editor.value.copy(inputMessage = if (accepted) "Manual key sent" else "Input unavailable: connect, stop any AI task, and resume control")
         return accepted
     }
 
@@ -140,9 +146,9 @@ class RemoteViewModel(
     }
 
     override fun onCleared() {
-        connectionJob?.cancel()
         input.releaseAll()
-        ai.stopTask()
+        // The workstation owns durable CAD jobs. Closing this screen must only
+        // release the phone's session; Stop AI remains an explicit user action.
         session.disconnect()
     }
 }

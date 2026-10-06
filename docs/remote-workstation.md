@@ -1,6 +1,6 @@
-# Remote workstation: demo and first live test build
+# Remote workstation: live test build
 
-Remote is part of the existing Android CAD Agent app. Home and Jobs remain simulated, with their repository preserved when switching between Demo and Live. Live provides primary-monitor viewing and manual input; AI desktop control and printer commands are unavailable.
+Remote is the app's primary screen. The Home/Jobs demo navigation and simulated workstation controls have been removed. The app starts unpaired and enables Remote only after selecting a live paired Windows workstation. Live provides primary-monitor viewing, manual input and the CAD task workflow exposed by the connected Windows Agent.
 
 ## Pair and connect to Windows
 
@@ -15,20 +15,16 @@ Follow the [Windows setup and physical test guide](https://github.com/jhaago/Sol
 
 Pairing records use Android Keystore AES-GCM encryption in the app's non-backup directory. Only the non-secret HTTPS origin is saved in preferences. Pairing codes, session tokens and desktop images remain in memory. Neither the app nor its settings asks for an OpenAI API key. Credentials go only into HTTPS authorization headers; redirects are disabled and TLS validation remains enabled.
 
-## Demo
-
-Select Settings → **Use simulated demo** while disconnected, then **Connect demo** in Remote. Manual records local input only. Assist shows a fixed suggestion; Agent runs a fixed sample sequence. Take Control, Stop AI or manual input stops the demo task. The sample print confirmation requires explicit approval and never sends a physical printer command. Instructions do not change the demonstration's fixed progression.
-
 ## Limits and verification
 
 Live JPEG images have a 1600-pixel longest edge and a maximum of five frames per second. Only the Windows primary monitor and ordinary unlocked desktop are supported. UAC, elevated applications, other Windows sessions and lock-screen control are unsupported. Input is ordered and bounded; unsent moves can coalesce, but a failed input event is never replayed. Stale images, generation changes and full queues disable control until an explicit Resume Control.
 
 CI runs the complete JVM unit suite, debug APK build, lint and Android 35 emulator tests. Tests cover pairing approval/rejection and persistence, real Android Keystore round-trip/corruption/deletion, TLS request bounds, reconnect backoff, stale authority/frames, renewal races, queue overflow, input timeout, JPEG rendering, navigation, rotation/background and drag cancellation. These do not prove real Windows pixels/input, emergency hotkeys, mobile-data connectivity or SOLIDWORKS geometry. Use the physical checklist in the Windows guide for those separate acceptance gates.
 
-The APK is a debug-signed test build. If Android rejects an update because CI used a different debug signing key, uninstall the earlier demo before installing this build. Uninstalling removes saved app data and pairing; revoke any previously paired device on Windows before pairing again.
+The APK is a debug-signed test build. If Android rejects an update because CI used a different debug signing key, uninstall the earlier build before installing this one. Uninstalling removes saved app data and pairing; revoke any previously paired device on Windows before pairing again.
 
 ## Architecture
 
-`di/AppContainer` preserves the CAD repository and selects revisioned Remote adapters. Demo adapter instances remain available to existing demo flows. `LiveConnectionDriver` owns separate frame, heartbeat and ordered input coroutines, cancels work when Remote is not visible, renews short-lived tokens and retries connection failures at 1, 2, 4, 8, then 15 seconds. `RemoteDemoDriver` stays separate from live control. The HTTPS transport does not contain a Tailscale SDK; another private HTTPS connector can replace it later without changing the app protocol.
+`di/AppContainer` starts with unavailable adapters and selects revisioned live Remote adapters after pairing. The old demo screens, models and fakes are under the JVM test source set and cannot be selected by the production app. `LiveConnectionDriver` owns separate frame, heartbeat and ordered input coroutines, cancels its phone-side session work when Remote is not visible, renews short-lived tokens and retries connection failures at 1, 2, 4, 8, then 15 seconds. Closing the screen does not cancel a durable workstation CAD job; Stop AI is explicit. The HTTPS transport does not contain a Tailscale SDK; another private HTTPS connector can replace it later without changing the app protocol.
 
 Approved [live design](https://github.com/jhaago/SolidWorks-CAD-Agent/blob/feature/v1-solidworks-2020/docs/superpowers/specs/2026-10-05-live-remote-workstation-design.md) and [implementation plan](https://github.com/jhaago/SolidWorks-CAD-Agent/blob/feature/v1-solidworks-2020/docs/superpowers/plans/2026-10-05-live-remote-workstation-implementation.md). Development remains on `feature/android-v0`; no main merge.

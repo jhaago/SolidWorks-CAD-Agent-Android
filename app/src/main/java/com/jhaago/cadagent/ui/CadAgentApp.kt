@@ -26,15 +26,7 @@ import com.jhaago.cadagent.remote.ui.RemoteViewModel
 import com.jhaago.cadagent.remote.ui.RemoteScreen
 import com.jhaago.cadagent.remote.ui.WorkstationSettingsScreen
 import com.jhaago.cadagent.ui.common.CadAgentViewModelFactory
-import com.jhaago.cadagent.ui.home.HomeScreen
-import com.jhaago.cadagent.ui.home.HomeViewModel
-import com.jhaago.cadagent.ui.jobdetail.JobDetailScreen
-import com.jhaago.cadagent.ui.jobdetail.JobDetailViewModel
-import com.jhaago.cadagent.ui.jobs.JobsScreen
-import com.jhaago.cadagent.ui.jobs.JobsViewModel
 import com.jhaago.cadagent.ui.navigation.Destination
-import com.jhaago.cadagent.ui.newjob.NewJobScreen
-import com.jhaago.cadagent.ui.newjob.NewJobViewModel
 import com.jhaago.cadagent.ui.settings.SettingsScreen
 import com.jhaago.cadagent.ui.theme.CadAgentTheme
 
@@ -43,7 +35,7 @@ fun CadAgentApp(container: AppContainer = viewModel<CadAgentAppViewModel>().cont
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
-    val topLevel = listOf(Destination.Home, Destination.Jobs, Destination.Remote, Destination.Settings)
+    val topLevel = listOf(Destination.Remote, Destination.Settings)
 
     CadAgentTheme {
         Scaffold(
@@ -54,7 +46,7 @@ fun CadAgentApp(container: AppContainer = viewModel<CadAgentAppViewModel>().cont
                             selected = currentRoute == destination.route,
                             onClick = {
                                 navController.navigate(destination.route) {
-                                    popUpTo(Destination.Home.route) { saveState = true }
+                                    popUpTo(Destination.Remote.route) { saveState = true }
                                     launchSingleTop = true
                                     restoreState = true
                                 }
@@ -68,36 +60,15 @@ fun CadAgentApp(container: AppContainer = viewModel<CadAgentAppViewModel>().cont
         ) { innerPadding ->
             NavHost(
                 navController = navController,
-                startDestination = Destination.Home.route,
+                startDestination = Destination.Remote.route,
                 modifier = Modifier.padding(innerPadding),
             ) {
-                composable(Destination.Home.route) {
-                    val homeViewModel: HomeViewModel = viewModel(
-                        factory = CadAgentViewModelFactory { HomeViewModel(container.repository) },
-                    )
-                    val state by homeViewModel.uiState.collectAsStateWithLifecycle()
-                    HomeScreen(
-                        state = state,
-                        onNewJob = { navController.navigate(Destination.NewJob.route) },
-                        onJobClick = { navController.navigate(Destination.JobDetail.route(it)) },
-                    )
-                }
-                composable(Destination.Jobs.route) {
-                    val jobsViewModel: JobsViewModel = viewModel(
-                        factory = CadAgentViewModelFactory { JobsViewModel(container.repository) },
-                    )
-                    val state by jobsViewModel.uiState.collectAsStateWithLifecycle()
-                    JobsScreen(
-                        state = state,
-                        onJobClick = { navController.navigate(Destination.JobDetail.route(it)) },
-                    )
-                }
                 composable(Destination.Remote.route) {
                     val adapters by container.remoteAdapters.collectAsStateWithLifecycle()
                     val remoteViewModel: RemoteViewModel = viewModel(
                         key = "remote-${adapters.revision}",
                         factory = CadAgentViewModelFactory {
-                            RemoteViewModel(adapters.session, adapters.ai, adapters.display, adapters.input, adapters.demo)
+                            RemoteViewModel(adapters.session, adapters.ai, adapters.display, adapters.input)
                         },
                     )
                     val state by remoteViewModel.uiState.collectAsStateWithLifecycle()
@@ -112,45 +83,6 @@ fun CadAgentApp(container: AppContainer = viewModel<CadAgentAppViewModel>().cont
                 }
                 composable(Destination.Settings.route) {
                     container.remoteSettings?.let { WorkstationSettingsScreen(it) } ?: SettingsScreen()
-                }
-                composable(Destination.NewJob.route) {
-                    val newJobViewModel: NewJobViewModel = viewModel(
-                        factory = CadAgentViewModelFactory { NewJobViewModel(container.repository) },
-                    )
-                    val state by newJobViewModel.uiState.collectAsStateWithLifecycle()
-                    LaunchedEffect(state.submittedJobId) {
-                        state.submittedJobId?.let { jobId ->
-                            newJobViewModel.consumeSubmittedJob()
-                            navController.navigate(Destination.JobDetail.route(jobId)) {
-                                popUpTo(Destination.NewJob.route) { inclusive = true }
-                            }
-                        }
-                    }
-                    NewJobScreen(
-                        state = state,
-                        onPromptChanged = newJobViewModel::onPromptChanged,
-                        onSubmit = newJobViewModel::submit,
-                        onBack = { navController.popBackStack() },
-                    )
-                }
-                composable(
-                    route = Destination.JobDetail.route,
-                    arguments = listOf(navArgument(Destination.JobDetail.ARGUMENT) { type = NavType.StringType }),
-                ) { entry ->
-                    val jobId = entry.arguments?.getString(Destination.JobDetail.ARGUMENT).orEmpty()
-                    val detailViewModel: JobDetailViewModel = viewModel(
-                        key = "job-detail-$jobId",
-                        factory = CadAgentViewModelFactory { JobDetailViewModel(jobId, container.repository) },
-                    )
-                    val state by detailViewModel.uiState.collectAsStateWithLifecycle()
-                    JobDetailScreen(
-                        state = state,
-                        onApprove = detailViewModel::approve,
-                        onRequestChanges = detailViewModel::requestChanges,
-                        onCancel = detailViewModel::cancel,
-                        onReload = detailViewModel::reload,
-                        onBack = { navController.popBackStack() },
-                    )
                 }
             }
         }

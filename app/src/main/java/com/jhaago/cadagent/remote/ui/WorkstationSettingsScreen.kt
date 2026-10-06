@@ -31,11 +31,10 @@ fun WorkstationSettingsScreen(controller: WorkstationSettingsController) {
             Button(onClick = controller::pair, enabled = state.pairingSecret.isNotBlank(), modifier = Modifier.testTag("pair-workstation")) { Text("Pair with Windows") }
             OutlinedButton(onClick = controller::useSaved, modifier = Modifier.testTag("use-live")) { Text("Use saved live workstation") }
             OutlinedButton(onClick = controller::forget, modifier = Modifier.testTag("forget-workstation")) { Text("Forget saved pairing") }
-            OutlinedButton(onClick = controller::useDemo, modifier = Modifier.testTag("use-demo")) { Text("Use simulated demo") }
             state.message?.let { Text(it) }
         }
         state.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("pairing-error")) }
         Text("Pairing approval happens on Windows. The phone never asks for an OpenAI API key.")
-        Text("Live Remote provides manual viewing and control. Assist and Agent remain demo modes. CAD jobs in Home and Jobs remain simulated in this Android build.")
+        Text("After pairing, Remote supports viewing, control and CAD jobs: submit instructions, clarify or revise plans, approve, review evidence and download the native file.")
     }
 }

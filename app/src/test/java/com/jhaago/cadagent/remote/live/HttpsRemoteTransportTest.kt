@@ -23,6 +23,14 @@ class HttpsRemoteTransportTest {
         override fun getLocalCertificates(): Array<Certificate>? = null
         override fun getServerCertificates(): Array<Certificate> = emptyArray()
     }
+    @Test fun lifecycleReadWindowDoesNotRelaxUrgentControlWindow() = runTest {
+        val control = Connection(URL("https://pc.example/remote/v1/input"))
+        HttpsRemoteTransport { control }.call(RemoteEndpoint.parse("https://pc.example"), RemoteOperation("input", "POST", "Session", "token"))
+        assertEquals(2000, control.readTimeout)
+        val planning = Connection(URL("https://pc.example/remote/v1/agent/jobs"))
+        HttpsRemoteTransport { planning }.call(RemoteEndpoint.parse("https://pc.example"), RemoteOperation("agent/jobs", "POST", "Session", "token"))
+        assertEquals(15000, planning.readTimeout)
+    }
     @Test fun authorizationIsOnlyInHeadersAndRedirectsAreDisabled() = runTest {
         val connection = Connection(URL("https://pc.example/remote/v1/input"))
         val transport = HttpsRemoteTransport { connection }

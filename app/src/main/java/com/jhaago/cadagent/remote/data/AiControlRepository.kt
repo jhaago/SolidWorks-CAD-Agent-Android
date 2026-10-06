@@ -6,6 +6,10 @@ import kotlinx.coroutines.flow.StateFlow
 interface AiControlRepository {
     val status: StateFlow<RemoteWorkstationStatus>
     fun submitTask(instruction: String): String?
+    fun approvePlan(): Boolean = false
+    fun requestChanges(instructions: String): Boolean = false
+    fun completeTask(): Boolean = false
+    suspend fun downloadArtifact(): com.jhaago.cadagent.remote.model.AiArtifact? = null
     fun stopTask()
     fun approveProtectedAction(id: String): Boolean
     fun rejectProtectedAction(id: String): Boolean

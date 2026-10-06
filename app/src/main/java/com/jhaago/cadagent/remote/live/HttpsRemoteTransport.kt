@@ -13,10 +13,13 @@ class HttpsRemoteTransport(private val open: (URL) -> HttpsURLConnection = { it.
         val connection = open(endpoint.url(operation.route))
         try {
             val frame = operation.route == "display/frame"
-            val limit = if (frame) 3 * 1024 * 1024 else 65536
-            val deadline = System.nanoTime() + (if (frame) 5_000_000_000L else 2_000_000_000L)
+            val artifact = operation.route.matches(Regex("agent/jobs/[A-Za-z0-9-]+/artifact"))
+            val lifecycle = operation.route.startsWith("agent/") || operation.scheme in setOf("Pairing", "Receipt")
+            val readWindow = when { artifact -> 30000; lifecycle -> 15000; frame -> 5000; else -> 2000 }
+            val limit = when { artifact -> 6 * 1024 * 1024; frame -> 3 * 1024 * 1024; lifecycle -> 512 * 1024; else -> 65536 }
+            val deadline = System.nanoTime() + readWindow * 1_000_000L
             connection.connectTimeout = 2000
-            connection.readTimeout = if (frame) 5000 else 2000
+            connection.readTimeout = readWindow
             connection.instanceFollowRedirects = false
             connection.useCaches = false
             connection.requestMethod = operation.method
@@ -36,7 +39,7 @@ class HttpsRemoteTransport(private val open: (URL) -> HttpsURLConnection = { it.
                 // Do not display arbitrary server bodies, redirects or authentication values.
                 val message = when (status) {
                     401, 403 -> "Remote authorization ended or pairing failed. Check Windows and reconnect."
-                    409 -> "The workstation is busy or control changed. Check Windows and resume control."
+                    409 -> if (lifecycle) "The job or plan revision changed. Wait for the refreshed plan before trying again." else "The workstation is busy or control changed. Check Windows and resume control."
                     429 -> "The workstation is busy. Wait briefly and reconnect."
                     else -> "The Windows remote request failed (HTTP $status). Check its control window."
                 }

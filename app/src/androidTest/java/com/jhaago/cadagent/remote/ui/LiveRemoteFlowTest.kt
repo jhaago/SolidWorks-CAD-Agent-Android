@@ -68,7 +68,7 @@ class LiveRemoteFlowTest {
             compose.onNodeWithTag("stop-ai").assertExists().assertIsNotEnabled()
             compose.onNodeWithTag("take-control").performClick()
             compose.waitUntil(5000) { driver.status.value.controller == RemoteController.User }
-            compose.onNodeWithText("Home").performClick()
+            compose.onNodeWithText("Settings").performClick()
             compose.waitUntil(5000) { driver.status.value.connection == RemoteConnectionState.Disconnected }
             compose.onNodeWithText("Remote").performClick()
             compose.waitUntil(5000) { driver.frame.value != null }

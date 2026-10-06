@@ -67,7 +67,7 @@ fun RemoteScreen(state: RemoteUiState, actions: RemoteViewModel) {
                         FilterChip(
                             selected = state.session.mode == mode,
                             onClick = { actions.selectMode(mode) },
-                            enabled = state.connected && !state.session.task.active && state.session.controller != RemoteController.User,
+                            enabled = state.connected && !state.session.task.active,
                             label = { Text(mode.name) },
                             modifier = Modifier.testTag("mode-${mode.name}"),
                         )

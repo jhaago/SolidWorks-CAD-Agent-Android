@@ -1,6 +1,6 @@
 # SolidWorks CAD Agent Android
 
-Native Android companion app for `jhaago/SolidWorks-CAD-Agent`. Development remains on `feature/android-v0`; nothing is merged to main.
+Native Android companion app for `jhaago/SolidWorks-CAD-Agent`. Development is reviewed on feature branches before integration to `main`.
 
 The app opens directly into **Remote** with **Settings** as its only other top-level destination. Home/Jobs demo navigation and simulated workstation controls have been removed from the app. Their old screens, models and fakes remain under `app/src/test` for regression tests only. A workstation must be paired over private HTTPS before connecting.
 

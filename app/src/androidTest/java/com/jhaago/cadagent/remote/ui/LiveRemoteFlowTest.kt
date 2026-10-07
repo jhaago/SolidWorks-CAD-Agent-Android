@@ -1,6 +1,7 @@
 package com.jhaago.cadagent.remote.ui
 
 import android.graphics.Bitmap
+import androidx.test.espresso.Espresso
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.graphics.toPixelMap
@@ -56,23 +57,39 @@ class LiveRemoteFlowTest {
             compose.onNodeWithText("Remote").performClick()
             compose.onNodeWithTag("connect-remote").performClick()
             compose.waitUntil(5000) { driver.frame.value != null }
-            compose.onNodeWithTag("controller").assertTextEquals("Control: No controller")
+            compose.onNodeWithTag("controller").assertTextEquals("Viewing only")
             compose.onNodeWithTag("remote-content").performScrollToNode(hasTestTag("remote-display"))
             compose.waitUntil(5000) { compose.onAllNodesWithTag("live-frame").fetchSemanticsNodes().isNotEmpty() }
             compose.onNodeWithTag("live-frame").assertExists()
             val pixels = compose.onNodeWithTag("remote-display").captureToImage().toPixelMap()
             val blue = pixels[pixels.width / 2, pixels.height / 3]
             assertTrue("The real JPEG fixture must be rendered", blue.blue > .8f && blue.red < .2f)
-            compose.onNodeWithTag("remote-content").performScrollToNode(hasTestTag("run-ai-task"))
+            compose.onNodeWithTag("ai-instruction").assertDoesNotExist()
+            compose.onNodeWithText("CAD Chat").performClick()
+            compose.onNodeWithTag("cad-chat-content").performScrollToNode(hasTestTag("add-picture"))
+            compose.onNodeWithTag("add-picture").performClick()
+            compose.onNodeWithTag("choose-gallery").assertIsDisplayed()
+            compose.onNodeWithTag("take-photo").assertIsDisplayed()
+            Espresso.pressBack()
+            compose.onNodeWithTag("choose-gallery").assertDoesNotExist()
+            compose.onNodeWithTag("cad-chat-content").performScrollToNode(hasTestTag("run-ai-task"))
             compose.onNodeWithTag("run-ai-task").assertExists().assertIsNotEnabled()
-            compose.onNodeWithTag("stop-ai").assertExists().assertIsNotEnabled()
+            compose.onNodeWithText("Remote").performClick()
+            compose.waitUntil(5000) { driver.status.value.connection == RemoteConnectionState.Connected }
+            compose.onNodeWithTag("take-control").performClick()
+            compose.waitUntil(5000) { driver.status.value.controller == RemoteController.User }
+            compose.onNodeWithTag("remote-content").performScrollToNode(hasTestTag("release-control"))
+            compose.onNodeWithTag("release-control").performClick()
+            compose.waitUntil(5000) { driver.status.value.connection == RemoteConnectionState.Connected && driver.status.value.controller == RemoteController.None }
+            assertTrue("Releasing desktop control must end the old remote lease", server.routes.contains("session/release"))
+            compose.waitUntil(5000) { driver.frame.value != null }
             compose.onNodeWithTag("take-control").performClick()
             compose.waitUntil(5000) { driver.status.value.controller == RemoteController.User }
             compose.onNodeWithText("Settings").performClick()
             compose.waitUntil(5000) { driver.status.value.connection == RemoteConnectionState.Disconnected }
             compose.onNodeWithText("Remote").performClick()
             compose.waitUntil(5000) { driver.frame.value != null }
-            compose.onNodeWithTag("controller").assertTextEquals("Control: No controller")
+            compose.onNodeWithTag("controller").assertTextEquals("Viewing only")
             compose.onNodeWithTag("take-control").performClick()
             compose.waitUntil(5000) { driver.status.value.controller == RemoteController.User }
             server.holdFrames = true

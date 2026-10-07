@@ -105,6 +105,42 @@ class RemoteViewModelTest {
         assertFalse(input.hasHeldInput)
         assertEquals(RemoteConnectionState.Disconnected, session.status.value.connection)
     }
+    @Test fun `cad task starts from the default mode without a mode choice`() = runTest {
+        val session = connected().also { it.enterViewOnly() }
+        val vm = viewModel(session)
+        vm.changeInstruction("Create a plate")
+        runCurrent()
+        vm.runTask()
+        assertEquals(RemoteControlMode.Agent, session.status.value.mode)
+        assertEquals(AiTaskPhase.Running, session.status.value.task.phase)
+    }
+
+    @Test fun `photo is retained until a task is submitted and can be removed`() = runTest {
+        val session = connected().also { it.enterViewOnly() }
+        val vm = viewModel(session)
+        vm.attachPhoto(byteArrayOf(1, 2, 3))
+        runCurrent()
+        assertNotNull(vm.uiState.value.photo)
+        vm.removePhoto(); runCurrent()
+        assertNull(vm.uiState.value.photo)
+        vm.attachPhoto(byteArrayOf(1, 2, 3))
+        vm.changeInstruction("Model the sketch")
+        runCurrent()
+        vm.runTask(); runCurrent()
+        assertEquals(AiTaskPhase.Running, session.status.value.task.phase)
+        assertNull(vm.uiState.value.photo)
+    }
+    @Test fun `photo cannot be submitted to a workstation without image support`() = runTest {
+        val session = connected().also { it.enterViewOnly(supportsJobImages = false) }
+        val vm = viewModel(session)
+        vm.attachPhoto(byteArrayOf(1, 2, 3))
+        vm.changeInstruction("Model the sketch")
+        runCurrent()
+        assertFalse(vm.uiState.value.canRunTask)
+        vm.runTask(); runCurrent()
+        assertEquals(AiTaskPhase.Idle, session.status.value.task.phase)
+        assertTrue(vm.uiState.value.error!!.contains("Update the Windows CAD Agent"))
+    }
 
     @Test fun `viewmodel disposal leaves durable workstation job running`() {
         val active = RemoteWorkstationStatus(connection = RemoteConnectionState.Connected, isLive = true,

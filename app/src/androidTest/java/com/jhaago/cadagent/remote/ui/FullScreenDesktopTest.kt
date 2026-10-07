@@ -26,6 +26,7 @@ class FullScreenDesktopTest {
 
     @Test fun desktopControlsRemainUnavailableUntilLiveWorkstationIsPaired() {
         compose.setContent { CadAgentApp(AppContainer()) }
+        compose.onNodeWithText("Remote").performClick()
         compose.onNodeWithTag("remote-screen").assertIsDisplayed()
         compose.onNodeWithTag("unpaired-workstation").assertIsDisplayed()
         compose.onNodeWithTag("enter-full-screen").assertDoesNotExist()

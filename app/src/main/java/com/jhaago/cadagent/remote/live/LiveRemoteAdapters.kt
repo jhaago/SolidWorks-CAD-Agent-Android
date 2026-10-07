@@ -25,6 +25,7 @@ class LiveRemoteInputController(private val driver: LiveConnectionDriver) : Remo
 class LiveAiControlRepository(private val driver: LiveConnectionDriver) : AiControlRepository {
     override val status = driver.status
     override fun submitTask(instruction: String) = driver.submitAiTask(instruction)
+    override fun submitTaskWithImage(instruction: String, photo: com.jhaago.cadagent.remote.model.CadPhoto) = driver.submitAiTask(instruction, photo)
     override fun stopTask() = driver.stopAiTask()
     override fun approvePlan() = driver.approvePlan()
     override fun requestChanges(instructions: String) = driver.requestChanges(instructions)

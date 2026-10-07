@@ -19,9 +19,12 @@ data class RemoteUiState(
     val inputMessage: String = "Tap or drag the display to use manual input",
     val artifact: AiArtifact? = null,
     val downloadingArtifact: Boolean = false,
+    val photo: CadPhoto? = null,
+    val photoLoading: Boolean = false,
 ) {
     val connected: Boolean get() = session.connection == RemoteConnectionState.Connected
-    val canRunTask: Boolean get() = connected && session.mode != RemoteControlMode.Manual && !session.task.active &&
+    val canRunTask: Boolean get() = connected && (session.controller != RemoteController.User || session.mode == RemoteControlMode.Assist) &&
+        !session.controlPending && !session.task.active && !photoLoading && (photo == null || session.supportsJobImages) &&
         instruction.isNotBlank() && instruction.trim().length <= 2000
 }
 
@@ -31,6 +34,8 @@ private data class EditorState(
     val inputMessage: String = "Tap or drag the display to use manual input",
     val artifact: AiArtifact? = null,
     val downloadingArtifact: Boolean = false,
+    val photo: CadPhoto? = null,
+    val photoLoading: Boolean = false,
 )
 
 class RemoteViewModel(
@@ -41,7 +46,7 @@ class RemoteViewModel(
 ) : ViewModel() {
     private val editor = MutableStateFlow(EditorState())
     val uiState: StateFlow<RemoteUiState> = combine(session.status, display.frame, editor) { state, frame, edit ->
-        RemoteUiState(state, frame, edit.instruction, edit.error, edit.inputMessage, edit.artifact, edit.downloadingArtifact)
+        RemoteUiState(state, frame, edit.instruction, edit.error, edit.inputMessage, edit.artifact, edit.downloadingArtifact, edit.photo, edit.photoLoading)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, RemoteUiState())
 
     fun connect() {
@@ -105,13 +110,41 @@ class RemoteViewModel(
         editor.value = editor.value.copy(instruction = value.take(2001), error = null)
     }
 
+    fun attachPhoto(bytes: ByteArray) {
+        editor.value = if (bytes.isEmpty() || bytes.size > 4 * 1024 * 1024)
+            editor.value.copy(error = "The picture must be at most 4 MiB.")
+        else editor.value.copy(photo = CadPhoto(bytes), error = null)
+    }
+
+    fun setPhotoLoading(value: Boolean) { editor.value = editor.value.copy(photoLoading = value) }
+
+    fun removePhoto() { editor.value = editor.value.copy(photo = null, error = null) }
+
+    fun photoError(message: String) { editor.value = editor.value.copy(error = message) }
+
     fun runTask() {
         if (session.status.value.task.active) return
+        if (editor.value.photoLoading) {
+            editor.value = editor.value.copy(error = "Wait for the picture to finish attaching.")
+            return
+        }
+        if (editor.value.photo != null && !session.status.value.supportsJobImages) {
+            editor.value = editor.value.copy(error = "Update the Windows CAD Agent before sending a picture.")
+            return
+        }
+        if ((session.status.value.controller == RemoteController.User && session.status.value.mode != RemoteControlMode.Assist) ||
+            session.status.value.controlPending) {
+            editor.value = editor.value.copy(error = "Release remote desktop control before starting a CAD task.")
+            return
+        }
         input.releaseAll()
-        if (ai.submitTask(editor.value.instruction) == null) {
-            editor.value = editor.value.copy(error = "Connect, choose Assist or Agent, and enter an instruction of 1–2000 characters.")
+        if (session.status.value.mode == RemoteControlMode.Manual) session.setMode(RemoteControlMode.Agent)
+        val submitted = editor.value.photo?.let { ai.submitTaskWithImage(editor.value.instruction, it) }
+            ?: if (editor.value.photo == null) ai.submitTask(editor.value.instruction) else null
+        if (submitted == null) {
+            editor.value = editor.value.copy(error = "Connect to Windows and enter a CAD instruction of 1–2000 characters.")
         } else {
-            editor.value = editor.value.copy(error = null)
+            editor.value = editor.value.copy(error = null, photo = null)
         }
     }
 

@@ -15,7 +15,7 @@ class HttpsRemoteTransport(private val open: (URL) -> HttpsURLConnection = { it.
             val frame = operation.route == "display/frame"
             val artifact = operation.route.matches(Regex("agent/jobs/[A-Za-z0-9-]+/artifact"))
             val lifecycle = operation.route.startsWith("agent/") || operation.scheme in setOf("Pairing", "Receipt")
-            val readWindow = when { artifact -> 30000; lifecycle -> 15000; frame -> 5000; else -> 2000 }
+            val readWindow = when { artifact || operation.route == "agent/jobs" -> 30000; lifecycle -> 15000; frame -> 5000; else -> 2000 }
             val limit = when { artifact -> 6 * 1024 * 1024; frame -> 3 * 1024 * 1024; lifecycle -> 512 * 1024; else -> 65536 }
             val deadline = System.nanoTime() + readWindow * 1_000_000L
             connection.connectTimeout = 2000
@@ -28,7 +28,8 @@ class HttpsRemoteTransport(private val open: (URL) -> HttpsURLConnection = { it.
             operation.deviceCredential?.let { connection.setRequestProperty("X-Remote-Device-Credential", it) }
             if (operation.method == "POST") {
                 val bytes = JSONObject(operation.payload).toString().toByteArray(Charsets.UTF_8)
-                if (bytes.size > 65536) throw RemoteFailure(0, "request_large", "This remote request is too large.")
+                val bodyLimit = if (operation.route == "agent/jobs") 6 * 1024 * 1024 else 65536
+                if (bytes.size > bodyLimit) throw RemoteFailure(0, "request_large", "This remote request is too large.")
                 connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
                 connection.doOutput = true
                 connection.setFixedLengthStreamingMode(bytes.size)

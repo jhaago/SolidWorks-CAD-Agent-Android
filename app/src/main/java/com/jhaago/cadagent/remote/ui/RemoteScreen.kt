@@ -24,62 +24,41 @@ fun RemoteScreen(state: RemoteUiState, actions: RemoteViewModel) {
     LaunchedEffect(available) { if (!available) { control = false; actions.cancelInput() } }
     fun changeControl(value: Boolean) { actions.cancelInput(); control = value && available }
     Column(Modifier.fillMaxSize().testTag("remote-screen")) {
-        Text("Remote workstation", Modifier.padding(start = 20.dp, top = 16.dp, bottom = 8.dp), style = MaterialTheme.typography.headlineSmall)
-        RemoteControlBar(state.session, actions::takeControl, actions::stopTask, state.frame != null)
+        Text("Remote desktop", Modifier.padding(start = 20.dp, top = 16.dp, bottom = 8.dp), style = MaterialTheme.typography.headlineSmall)
         LazyColumn(
             Modifier.weight(1f).fillMaxWidth().padding(horizontal = 20.dp).testTag("remote-content"),
             verticalArrangement = Arrangement.spacedBy(16.dp),
             contentPadding = PaddingValues(vertical = 16.dp),
         ) {
             item {
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(if (state.session.isLive) "Live · private HTTPS workstation" else "No live workstation selected", style = MaterialTheme.typography.titleMedium)
-                        Text("${state.session.workstationName} · ${state.session.connection}", Modifier.testTag("connection-status"))
-                        if (state.session.isLive && state.session.connection == RemoteConnectionState.Disconnected) {
-                            Button(onClick = actions::connect, modifier = Modifier.testTag("connect-remote")) {
-                                Text("Connect live workstation")
-                            }
-                        } else {
-                            OutlinedButton(
-                                onClick = actions::disconnect,
-                                enabled = !state.session.task.active,
-                                modifier = Modifier.testTag("disconnect-remote"),
-                            ) { Text(if (state.connected) "Disconnect" else "Cancel connection") }
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("${state.session.workstationName} · ${state.session.connection}", Modifier.testTag("connection-status"), style = MaterialTheme.typography.bodyMedium)
+                    if (!state.session.isLive) {
+                        Text("Pair a workstation in Settings before connecting.", Modifier.testTag("unpaired-workstation"))
+                    } else if (state.session.connection == RemoteConnectionState.Disconnected) {
+                        Button(onClick = actions::connect, modifier = Modifier.testTag("connect-remote")) { Text("Connect") }
+                    } else {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = actions::disconnect, enabled = !state.session.task.active,
+                                modifier = Modifier.testTag("disconnect-remote")) { Text("Disconnect") }
+                            if (state.connected && state.frame != null && !state.session.task.active)
+                                Button(onClick = actions::takeControl, enabled = !state.session.controlPending && state.session.controller != RemoteController.User,
+                                    modifier = Modifier.testTag("take-control")) { Text("Take control") }
+                            if (state.connected && state.session.controller == RemoteController.User)
+                                OutlinedButton(onClick = actions::cancelInput, modifier = Modifier.testTag("release-control")) { Text("View only") }
+                            if (state.session.task.active)
+                                OutlinedButton(onClick = actions::stopTask, enabled = state.session.task.phase != AiTaskPhase.Stopping,
+                                    modifier = Modifier.testTag("stop-ai")) { Text("Stop CAD task") }
                         }
-                        if (state.session.isLive && state.connected) {
-                            HorizontalDivider()
-                            Text("Agent Host: ${when (state.session.agentHostAvailable) { true -> "Available"; false -> "Unavailable"; null -> "Checking…" }}")
-                            val execution = state.session.executionMode ?: "Unknown mode"
-                            val model = state.session.aiModel ?: "Model not reported"
-                            Text("$execution · $model", style = MaterialTheme.typography.bodySmall)
-                            Text(
-                                when {
-                                    state.session.solidWorksAttached -> "SOLIDWORKS attached"
-                                    state.session.solidWorksRunning -> "SOLIDWORKS running · not attached"
-                                    else -> "SOLIDWORKS not running/attached"
-                                },
-                                modifier = Modifier.testTag("solidworks-status"),
-                            )
-                            state.session.solidWorksVersion?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                            Text("Document: ${state.session.activeDocument ?: "No active document reported"}", Modifier.testTag("active-document"), style = MaterialTheme.typography.bodySmall)
-                        } else if (!state.session.isLive) {
-                            Text("Pair a workstation in Settings before connecting.", Modifier.testTag("unpaired-workstation"), style = MaterialTheme.typography.bodySmall)
+                        if (state.connected) {
+                            Text(when {
+                                state.session.task.active -> "CAD task running · view only"
+                                state.session.controller == RemoteController.User -> "You control the desktop"
+                                else -> "Viewing only"
+                            }, Modifier.testTag("controller"), style = MaterialTheme.typography.bodySmall)
+                            Text(if (state.session.solidWorksAttached) "SOLIDWORKS attached" else "SOLIDWORKS unavailable",
+                                Modifier.testTag("solidworks-status"), style = MaterialTheme.typography.bodySmall)
                         }
-                        state.session.message?.let { Text(it) }
-                    }
-                }
-            }
-            item {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    RemoteControlMode.entries.forEach { mode ->
-                        FilterChip(
-                            selected = state.session.mode == mode,
-                            onClick = { actions.selectMode(mode) },
-                            enabled = state.connected && !state.session.task.active,
-                            label = { Text(mode.name) },
-                            modifier = Modifier.testTag("mode-${mode.name}"),
-                        )
                     }
                 }
             }
@@ -99,9 +78,6 @@ fun RemoteScreen(state: RemoteUiState, actions: RemoteViewModel) {
                     TextButton(onClick = { actions.cancelInput(); viewResetKey++ }) { Text("Fit desktop") }
                     Text(state.inputMessage, style = MaterialTheme.typography.bodySmall)
                 }
-            }
-            if (state.session.isLive) {
-                item { AiTaskPanel(state, actions::changeInstruction, actions::runTask, onApprove = actions::approvePlan, onRequestChanges = actions::requestChanges, onComplete = actions::completeTask, onDownload = actions::downloadArtifact, onArtifactSaved = actions::artifactSaved) }
             }
         }
     }

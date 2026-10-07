@@ -2,14 +2,15 @@
 
 Native Android companion app for `jhaago/SolidWorks-CAD-Agent`. Development is reviewed on feature branches before integration to `main`.
 
-The app opens directly into **Remote** with **Settings** as its only other top-level destination. Home/Jobs demo navigation and simulated workstation controls have been removed from the app. Their old screens, models and fakes remain under `app/src/test` for regression tests only. A workstation must be paired over private HTTPS before connecting.
+The app opens in **CAD Chat**, with separate **Remote** desktop and **Settings** tabs. Home/Jobs demo navigation and simulated workstation controls have been removed from the app. Their old screens, models and fakes remain under `app/src/test` for regression tests only. A workstation must be paired over private HTTPS before connecting.
 
-## Try Remote
+## Try the paired workstation
 
 1. Configure the HTTPS origin and pair with Windows in **Settings** using the [pairing and Windows setup guide](docs/remote-workstation.md).
-2. Open **Remote**, connect to the paired workstation, and confirm the view-only desktop image appears.
-3. Explicitly resume control before sending mouse or keyboard input. Reconnects start view-only.
-4. Submit, revise, approve, review, or download live CAD jobs from the task panel when connected.
+2. Open **CAD Chat** and connect. Enter a CAD instruction to prepare a plan; revise, approve, review, or download the resulting job there.
+3. Open **Remote** to see the desktop. Choose **Take control** before sending mouse or keyboard input, and **View only** to release it. Reconnects start view-only.
+
+CAD Chat can attach one reference picture from the gallery or camera to a normal CAD task. The phone scales and encodes the selected image as JPEG; the workstation keeps it with the job for clarification and replanning. The app blocks photo submission until the paired Windows Agent reports support for image jobs, preventing an older version from silently dropping the photo. A plan still needs separate approval before CAD execution. This source build has not yet been installed and checked against the paired Windows workstation.
 
 There is no in-app simulated workstation path. Real Windows capture/input, mobile-data behavior and SOLIDWORKS geometry still require physical testing.
 
@@ -26,7 +27,7 @@ Debug APK: `app/build/outputs/apk/debug/app-debug.apk`. GitHub Actions builds th
 
 ## Architecture
 
-Remote uses separate session, AI-control, display and input interfaces. Test fakes publish deterministic session/task snapshots from test sources; production starts in an unpaired state and cannot connect until live pairing selects adapters. The app container survives Activity configuration changes, but sessions start disconnected after process termination. Leaving Remote releases phone input and its viewing session; it does not cancel a durable workstation CAD job. Pairing uses encrypted Android Keystore storage outside backups.
+Remote uses separate session, AI-control, display and input interfaces. Test fakes publish deterministic session/task snapshots from test sources; production starts in an unpaired state and cannot connect until live pairing selects adapters. The app container survives Activity configuration changes, but sessions start disconnected after process termination. Moving between CAD Chat and Remote retains the connection while releasing phone input; entering Settings pauses the connection. None of those actions cancels a durable workstation CAD job. Pairing uses encrypted Android Keystore storage outside backups.
 
 See [Remote Workstation](docs/remote-workstation.md) for guarantees, limitations and the live Windows backend boundary. Authoritative design and plan:
 

@@ -17,6 +17,6 @@ class PhoneJobPanelTest {
         compose.onNodeWithTag("approve-cad-plan").assertExists()
         compose.onNodeWithTag("revision-instructions").assertExists()
         compose.onNodeWithTag("cad-plan-summary").assertTextEquals("Plate plan")
-        compose.onNodeWithText("Live tasks run through the paired Windows CAD Agent. Cancellation must be confirmed before manual input is re-enabled.").assertExists()
+        compose.onNodeWithText("The Windows CAD Agent runs approved plans. Stopping a task must be confirmed before remote control resumes.").assertExists()
     }
 }

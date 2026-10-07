@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.StateFlow
 interface AiControlRepository {
     val status: StateFlow<RemoteWorkstationStatus>
     fun submitTask(instruction: String): String?
+    fun submitTaskWithImage(instruction: String, photo: com.jhaago.cadagent.remote.model.CadPhoto): String? = null
     fun approvePlan(): Boolean = false
     fun requestChanges(instructions: String): Boolean = false
     fun completeTask(): Boolean = false

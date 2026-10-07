@@ -54,6 +54,7 @@ class LiveConnectionDriver(
     private data class QueuedInput(val payload: Map<String, Any?>, val version: Long, val generation: Long)
     private data class AgentRuntime(
         val available: Boolean,
+        val supportsJobImages: Boolean,
         val executionMode: String?,
         val model: String?,
         val solidWorksRunning: Boolean,
@@ -168,12 +169,13 @@ class LiveConnectionDriver(
         )
     }
 
-    fun submitAiTask(instruction: String): String? = synchronized(gate) {
+    fun submitAiTask(instruction: String, photo: CadPhoto? = null): String? = synchronized(gate) {
         val trimmed = instruction.trim()
         val state = mutableStatus.value
         val captured = grant
         if (trimmed.isBlank() || trimmed.length > 2000 || captured == null || !foreground ||
-            state.connection != RemoteConnectionState.Connected || state.mode == RemoteControlMode.Manual || state.task.active) return@synchronized null
+            state.connection != RemoteConnectionState.Connected || state.mode == RemoteControlMode.Manual || state.task.active ||
+            (photo != null && !state.supportsJobImages)) return@synchronized null
 
         val generation = ++aiGeneration
         submissionInFlight = true
@@ -187,7 +189,10 @@ class LiveConnectionDriver(
         val id = attempt
         work.launch {
             try {
-                val job = readJob(transport.call(workstation.endpoint, RemoteOperation("agent/jobs", "POST", "Session", captured.token, mapOf("prompt" to trimmed))).body)
+                val payload = if (photo == null) mapOf("prompt" to trimmed) else mapOf(
+                    "prompt" to trimmed,
+                    "image" to mapOf("mediaType" to "image/jpeg", "dataBase64" to Base64.getEncoder().encodeToString(photo.jpegBytes)))
+                val job = readJob(transport.call(workstation.endpoint, RemoteOperation("agent/jobs", "POST", "Session", captured.token, payload)).body)
                 val shouldCancel = synchronized(gate) {
                     if (!current(id) || grant?.token != captured.token || generation != aiGeneration) return@synchronized true
                     if (stopRequestedGeneration == generation) true
@@ -461,9 +466,15 @@ class LiveConnectionDriver(
             val pendingLocal = (currentTask.id?.startsWith("pending:") == true || currentTask.phase == AiTaskPhase.Stopping || mutationInFlight) && !recoveringSubmission
             val nextMode = if (!pendingLocal && remoteTask?.active == true && mutableStatus.value.mode == RemoteControlMode.Manual) RemoteControlMode.Agent else mutableStatus.value.mode
             val nextTask = if (recoveringSubmission && stopRequestedGeneration != null && remoteTask != null) remoteTask.copy(phase = AiTaskPhase.Stopping)
+                else if (!pendingLocal && remoteTask != null && remoteTask.id == currentTask.id &&
+                    remoteTask.phase == currentTask.phase && remoteTask.revisionId == null && currentTask.revisionId != null)
+                    // Status may contain only the list entry. Keep the revision-bound controls and
+                    // clarification until the full snapshot arrives; a changed phase still clears them.
+                    currentTask.copy(message = remoteTask.message)
                 else if (!pendingLocal && remoteTask != null && (remoteTask.id != currentTask.id || (remoteTask.revisionNumber ?: 0) >= (currentTask.revisionNumber ?: 0))) remoteTask else currentTask
             mutableStatus.value = mutableStatus.value.copy(
                 agentHostAvailable = runtime.available,
+                supportsJobImages = runtime.supportsJobImages,
                 executionMode = runtime.executionMode,
                 aiModel = runtime.model,
                 solidWorksRunning = runtime.solidWorksRunning,
@@ -496,7 +507,7 @@ class LiveConnectionDriver(
 
     private fun markAgentUnavailable(id: Long, captured: Grant) = synchronized(gate) {
         if (!current(id) || grant?.token != captured.token) return@synchronized
-        mutableStatus.value = mutableStatus.value.copy(message = "Workstation status is delayed. Waiting for the next update.")
+        mutableStatus.value = mutableStatus.value.copy(supportsJobImages = false, message = "Workstation status is delayed. Waiting for the next update.")
     }
 
     private fun applyJob(job: AiTaskState, generation: Long) {
@@ -600,6 +611,7 @@ class LiveConnectionDriver(
             controller = RemoteController.None,
             mode = RemoteControlMode.Manual,
             controlPending = false,
+            supportsJobImages = false,
             message = message,
         )
     }
@@ -622,6 +634,7 @@ class LiveConnectionDriver(
         val activeJob = if (json.isNull("activeJob")) null else readJobObject(json.getJSONObject("activeJob"))
         AgentRuntime(
             available = json.getBoolean("agentHostAvailable"),
+            supportsJobImages = json.optBoolean("jobInputImages", false),
             executionMode = json.optionalString("executionMode", 64),
             model = json.optionalString("model", 128),
             solidWorksRunning = solidWorks.getBoolean("running"),

@@ -19,7 +19,7 @@ import com.jhaago.cadagent.remote.ui.RemoteUiState
 fun AiTaskPanel(
     state: RemoteUiState, onInstruction: (String) -> Unit, onRun: () -> Unit,
     onApprove: () -> Unit = {}, onRequestChanges: (String) -> Unit = {}, onComplete: () -> Unit = {},
-    onDownload: () -> Unit = {}, onArtifactSaved: (String?) -> Unit = {},
+    onDownload: () -> Unit = {}, onArtifactSaved: (String?) -> Unit = {}, onStop: () -> Unit = {},
 ) {
     val task = state.session.task
     var changes by remember(task.id, task.revisionId) { mutableStateOf("") }
@@ -44,16 +44,12 @@ fun AiTaskPanel(
     LaunchedEffect(state.artifact) { state.artifact?.let { saveFile.launch(it.fileName) } }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("AI control · Live workstation", style = MaterialTheme.typography.titleMedium)
-            Text(when (state.session.mode) {
-                RemoteControlMode.Manual -> "Choose Assist or Agent before sending a CAD instruction."
-                RemoteControlMode.Assist -> "Send a bounded CAD task while keeping the remote view available."
-                RemoteControlMode.Agent -> "The PC agent executes the CAD task. Stop AI before taking manual control."
-            })
+            Text("Describe the CAD work", style = MaterialTheme.typography.titleMedium)
+            Text("Review the proposed plan before the workstation changes a model.")
             OutlinedTextField(
                 value = state.instruction,
                 onValueChange = onInstruction,
-                label = { Text("Workstation instruction") },
+                label = { Text("CAD instruction") },
                 enabled = !state.session.task.active,
                 maxLines = 3,
                 modifier = Modifier.fillMaxWidth().testTag("ai-instruction"),
@@ -61,9 +57,11 @@ fun AiTaskPanel(
             )
             state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             Button(onClick = onRun, enabled = state.canRunTask, modifier = Modifier.testTag("run-ai-task")) {
-                Text("Run CAD task")
+                Text("Prepare CAD plan")
             }
             Text(state.session.task.message, Modifier.testTag("ai-task-status"))
+            if (task.active) OutlinedButton(onClick = onStop, enabled = task.phase != AiTaskPhase.Stopping,
+                modifier = Modifier.testTag("stop-ai")) { Text("Stop CAD task") }
             if (task.id != null) {
                 Text(task.instruction, style = MaterialTheme.typography.bodyMedium)
                 task.revisionNumber?.let { Text("Current revision $it", Modifier.testTag("cad-revision")) }
@@ -111,7 +109,7 @@ fun AiTaskPanel(
                 }
                 if (task.actionPending) LinearProgressIndicator(Modifier.fillMaxWidth())
             }
-            Text("Live tasks run through the paired Windows CAD Agent. Cancellation must be confirmed before manual input is re-enabled.", style = MaterialTheme.typography.bodySmall)
+            Text("The Windows CAD Agent runs approved plans. Stopping a task must be confirmed before remote control resumes.", style = MaterialTheme.typography.bodySmall)
         }
     }
 }

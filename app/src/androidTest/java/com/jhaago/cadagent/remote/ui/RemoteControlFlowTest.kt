@@ -13,6 +13,8 @@ class RemoteControlFlowTest {
     @Test fun unpairedWorkstationCannotStartRemoteOrCadTasks() {
         compose.setContent { CadAgentApp(AppContainer()) }
 
+        compose.onNodeWithTag("cad-chat-screen").assertIsDisplayed()
+        compose.onNodeWithText("Remote").performClick()
         compose.onNodeWithTag("remote-screen").assertIsDisplayed()
         compose.onNodeWithTag("unpaired-workstation").assertIsDisplayed()
         compose.onNodeWithTag("connect-remote").assertDoesNotExist()

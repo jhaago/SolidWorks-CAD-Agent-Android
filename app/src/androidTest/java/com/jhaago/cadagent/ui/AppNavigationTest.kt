@@ -14,7 +14,7 @@ import org.junit.Test
 class AppNavigationTest {
     @get:Rule val compose = createComposeRule()
 
-    @Test fun appStartsUnpairedAndExposesOnlyLiveRemoteAndSettings() {
+    @Test fun appStartsWithSeparateCadChatRemoteAndSettingsTabs() {
         val container = AppContainer()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         container.configureRemoteSettings(scope,
@@ -29,13 +29,17 @@ class AppNavigationTest {
             })
         compose.setContent { CadAgentApp(container) }
 
-        compose.onNodeWithTag("remote-screen").assertIsDisplayed()
+        compose.onNodeWithTag("cad-chat-screen").assertIsDisplayed()
+        compose.onNodeWithTag("remote-screen").assertDoesNotExist()
         compose.onNodeWithText("Remote").assertIsDisplayed()
         compose.onNodeWithText("Settings").assertIsDisplayed()
         compose.onNodeWithText("Home").assertDoesNotExist()
         compose.onNodeWithText("Jobs").assertDoesNotExist()
         compose.onNodeWithText("Simulation · no live PC connection").assertDoesNotExist()
         compose.onNodeWithText("Connect demo").assertDoesNotExist()
+        compose.onNodeWithText("Remote").performClick()
+        compose.onNodeWithTag("remote-screen").assertIsDisplayed()
+        compose.onNodeWithTag("cad-chat-screen").assertDoesNotExist()
         compose.onNodeWithTag("connect-remote").assertDoesNotExist()
         compose.onNodeWithText("Pair a workstation in Settings before connecting.").assertIsDisplayed()
 

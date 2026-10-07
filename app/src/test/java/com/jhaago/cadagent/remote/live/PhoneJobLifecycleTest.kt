@@ -28,6 +28,52 @@ class PhoneJobLifecycleTest {
             })
         }
     }
+    @Test fun photoIsSubmittedWithNormalCadJobAndNoDesignBriefRoute() = runTest {
+        val server = Server()
+        val transport = object : RemoteTransport {
+            override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
+                if (operation.route == "agent/status") return RemoteResponse(200,
+                    """{"agentHostAvailable":true,"jobInputImages":true,"solidWorks":{"running":true,"attached":true,"visible":true},"activeJob":null}""")
+                if (operation.route == "agent/jobs") {
+                    server.calls += operation
+                    return RemoteResponse(202, """{"id":"$jobId","prompt":"Model the photo","state":"Interpreting"}""")
+                }
+                return server.call(endpoint, operation)
+            }
+        }
+        val driver = LiveConnectionDriver(backgroundScope, transport,
+            PairedWorkstation(RemoteEndpoint.parse("https://pc.example"), "device", "credential"),
+            { testScheduler.currentTime }, { true })
+        driver.setForeground(true); driver.connect(); runCurrent(); driver.setMode(RemoteControlMode.Agent)
+        assertNotNull(driver.submitAiTask("Model the photo", CadPhoto(byteArrayOf(1, 2, 3))))
+        runCurrent()
+        val request = server.calls.single { it.route == "agent/jobs" }
+        assertEquals("Session", request.scheme)
+        assertEquals("Model the photo", request.payload["prompt"])
+        @Suppress("UNCHECKED_CAST")
+        val image = request.payload["image"] as Map<String, String>
+        assertEquals("image/jpeg", image["mediaType"])
+        assertEquals("AQID", image["dataBase64"])
+        assertFalse(server.calls.any { it.route.contains("designs") })
+        driver.close()
+    }
+    @Test fun oldWindowsStatusCannotSilentlyDropPhoto() = runTest {
+        val server = Server()
+        val transport = object : RemoteTransport {
+            override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
+                if (operation.route == "agent/status") return RemoteResponse(200,
+                    """{"agentHostAvailable":true,"solidWorks":{"running":true,"attached":true,"visible":true},"activeJob":null}""")
+                return server.call(endpoint, operation)
+            }
+        }
+        val driver = LiveConnectionDriver(backgroundScope, transport,
+            PairedWorkstation(RemoteEndpoint.parse("https://pc.example"), "device", "credential"),
+            { testScheduler.currentTime }, { true })
+        driver.setForeground(true); driver.connect(); runCurrent(); driver.setMode(RemoteControlMode.Agent)
+        assertNull(driver.submitAiTask("Model photo", CadPhoto(byteArrayOf(1, 2, 3))))
+        assertFalse(server.calls.any { it.route == "agent/jobs" })
+        driver.close()
+    }
     @Test fun revisionChangesAndCompletionUseSessionAuthenticatedRoutes() = runTest {
         val server = Server()
         val driver = LiveConnectionDriver(backgroundScope, server, PairedWorkstation(RemoteEndpoint.parse("https://pc.example"), "device", "credential"), { testScheduler.currentTime }, { true })
@@ -108,6 +154,30 @@ class PhoneJobLifecycleTest {
         assertEquals("Plate plan", task.summary)
         assertTrue(task.active)
         assertEquals("{\"hasErrors\":false}", task.verifications.single().actual)
+        driver.close()
+    }
+    @Test fun briefStatusDoesNotEraseClarificationWhileDetailedRefreshIsDelayed() = runTest {
+        val server = Server().also { it.state = "AwaitingClarification" }
+        var failDetail = false
+        val transport = object : RemoteTransport {
+            override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
+                if (operation.route == "agent/status") return RemoteResponse(200,
+                    """{"agentHostAvailable":true,"solidWorks":{"running":true,"attached":true,"visible":true},"activeJob":{"id":"$jobId","prompt":"Build plate","state":"AwaitingClarification"}}""")
+                if (operation.route == "agent/jobs/$jobId" && failDetail)
+                    throw RemoteFailure(0, "timeout", "Detailed job read timed out")
+                return server.call(endpoint, operation)
+            }
+        }
+        val driver = LiveConnectionDriver(backgroundScope, transport,
+            PairedWorkstation(RemoteEndpoint.parse("https://pc.example"), "device", "credential"),
+            { testScheduler.currentTime }, { true })
+        driver.setForeground(true); driver.connect(); runCurrent()
+        advanceTimeBy(1100); runCurrent()
+        assertEquals(revision, driver.status.value.task.revisionId)
+        failDetail = true
+        advanceTimeBy(1100); runCurrent()
+        assertEquals(revision, driver.status.value.task.revisionId)
+        assertTrue(driver.status.value.task.canRevise)
         driver.close()
     }
     @Test fun approvalSendsTheDisplayedRevisionOnce() = runTest {

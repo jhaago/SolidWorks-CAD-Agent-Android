@@ -27,6 +27,11 @@ class FakeRemoteSessionRepository : RemoteSessionRepository {
         return true
     }
 
+    /** The live workstation starts view-only; the legacy demo starts with manual authority. */
+    @Synchronized fun enterViewOnly(supportsJobImages: Boolean = true) {
+        publish(status.value.copy(controller = RemoteController.None, supportsJobImages = supportsJobImages))
+    }
+
     @Synchronized override fun disconnect() {
         if (status.value.connection == RemoteConnectionState.Disconnected) return
         connectionAttempt++

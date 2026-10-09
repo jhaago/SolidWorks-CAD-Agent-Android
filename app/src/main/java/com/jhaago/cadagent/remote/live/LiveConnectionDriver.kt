@@ -676,6 +676,7 @@ class LiveConnectionDriver(
         }
         val revisionId = json.optionalString("currentRevisionId", 128)?.also { UUID.fromString(it) }
         val plan = json.optJSONObject("plan")
+        val planVersion = if (plan?.has("planVersion") == true) plan.getInt("planVersion") else null
         fun strings(name: String): List<String> {
             val values = plan?.optJSONArray(name) ?: plan?.optJSONArray(name.replaceFirstChar { it.uppercase() }) ?: return emptyList()
             require(values.length() <= 100)
@@ -686,6 +687,16 @@ class LiveConnectionDriver(
                 text
             }
         }
+        val versionTwoSteps = if (planVersion == 2) {
+            val steps = plan?.optJSONArray("steps")
+            require((steps?.length() ?: 0) <= 100)
+            (0 until (steps?.length() ?: 0)).map { index ->
+                val step = steps!!.getJSONObject(index)
+                val text = "${step.requiredString("command", 256)} ${step.optJSONObject("parameters") ?: "{}"}"
+                require(text.length <= 8000)
+                text
+            }
+        } else emptyList()
         val checks = json.optJSONArray("verifications")
         require((checks?.length() ?: 0) <= 100)
         val verifications = (0 until (checks?.length() ?: 0)).mapNotNull { index ->
@@ -702,8 +713,9 @@ class LiveConnectionDriver(
         if (json.optBoolean("hasUnresolvedAmbiguity") && ambiguities.isEmpty()) ambiguities += json.optionalString("ambiguityMessage", 8000) ?: "Clarification is required before approval."
         return AiTaskState(id = id, instruction = prompt, phase = phase, message = message,
             revisionId = revisionId, revisionNumber = if (json.isNull("currentRevisionNumber") || !json.has("currentRevisionNumber")) null else json.getInt("currentRevisionNumber"),
+            planVersion = planVersion,
             summary = plan?.optionalString("summary", 8000) ?: plan?.optionalString("Summary", 8000), assumptions = strings("assumptions"), ambiguities = ambiguities,
-            proposedCommands = strings("proposedCommands"), verifications = verifications,
+            proposedCommands = if (planVersion == 2) versionTwoSteps else strings("proposedCommands"), verifications = verifications,
             outputPath = json.optionalString("outputPath", 8000) ?: saveResult, planValidated = json.optBoolean("planValidated"))
     }
 

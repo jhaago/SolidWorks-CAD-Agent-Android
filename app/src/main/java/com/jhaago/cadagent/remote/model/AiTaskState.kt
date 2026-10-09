@@ -11,6 +11,7 @@ data class AiTaskState(
     val message: String = "No AI task running",
     val revisionId: String? = null,
     val revisionNumber: Int? = null,
+    val planVersion: Int? = null,
     val summary: String? = null,
     val assumptions: List<String> = emptyList(),
     val ambiguities: List<String> = emptyList(),
@@ -22,7 +23,7 @@ data class AiTaskState(
 ) {
     val active: Boolean get() = phase in setOf(AiTaskPhase.Running, AiTaskPhase.Stopping, AiTaskPhase.AwaitingProtectedAction,
         AiTaskPhase.AwaitingClarification, AiTaskPhase.AwaitingApproval, AiTaskPhase.ReadyForReview)
-    val canApprove: Boolean get() = phase == AiTaskPhase.AwaitingApproval && revisionId != null && planValidated && ambiguities.isEmpty() && !actionPending
-    val canRevise: Boolean get() = phase in setOf(AiTaskPhase.AwaitingClarification, AiTaskPhase.AwaitingApproval, AiTaskPhase.ReadyForReview) && revisionId != null && !actionPending
+    val canApprove: Boolean get() = phase == AiTaskPhase.AwaitingApproval && revisionId != null && planValidated && ambiguities.isEmpty() && !actionPending && (planVersion != 2 || proposedCommands.isNotEmpty())
+    val canRevise: Boolean get() = phase in setOf(AiTaskPhase.AwaitingClarification, AiTaskPhase.AwaitingApproval, AiTaskPhase.ReadyForReview) && revisionId != null && !actionPending && !(planVersion == 2 && planValidated)
     val canComplete: Boolean get() = phase == AiTaskPhase.ReadyForReview && !actionPending
 }

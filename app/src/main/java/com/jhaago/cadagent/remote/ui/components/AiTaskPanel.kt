@@ -65,6 +65,7 @@ fun AiTaskPanel(
             if (task.id != null) {
                 Text(task.instruction, style = MaterialTheme.typography.bodyMedium)
                 task.revisionNumber?.let { Text("Current revision $it", Modifier.testTag("cad-revision")) }
+                task.planVersion?.let { Text("CAD plan version $it", Modifier.testTag("cad-plan-version")) }
                 task.summary?.let { Text(it, Modifier.testTag("cad-plan-summary"), style = MaterialTheme.typography.titleSmall) }
                 if (task.assumptions.isNotEmpty()) {
                     Text("Assumptions", style = MaterialTheme.typography.titleSmall)
@@ -77,6 +78,9 @@ fun AiTaskPanel(
                 if (task.proposedCommands.isNotEmpty()) {
                     Text("Command plan", style = MaterialTheme.typography.titleSmall)
                     task.proposedCommands.forEachIndexed { index, command -> Text("${index + 1}. $command") }
+                }
+                if (task.planVersion == 2 && task.planValidated) {
+                    Text("To change this new part, start a new CAD task with a new filename.", style = MaterialTheme.typography.bodySmall)
                 }
                 if (task.canRevise) {
                     OutlinedTextField(changes, { changes = it.take(2001) }, label = { Text("Clarification or requested changes") },

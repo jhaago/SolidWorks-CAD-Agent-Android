@@ -12,6 +12,8 @@ The app opens in **CAD Chat**, with separate **Remote** desktop and **Settings**
 
 CAD Chat can attach one reference picture from the gallery or camera to a normal CAD task. The phone scales and encodes the selected image as JPEG; the workstation keeps it with the job for clarification and replanning. The app blocks photo submission until the paired Windows Agent reports support for image jobs, preventing an older version from silently dropping the photo. A plan still needs separate approval before CAD execution. This source build has not yet been installed and checked against the paired Windows workstation.
 
+Version 0.4.1 displays the steps in a version-2 CAD plan before approval. The Windows Agent currently admits only `V2 rectangle boss: 20 x 10 x 5 mm; save as new-part.sldprt`-style requests: a new centred Top Plane rectangle, blind boss and non-overwriting save. Android hides in-place revision controls for this validated plan; submit a new task with a new filename to change it. This APK has passed local unit tests and lint, but a paired physical-phone run has not yet been performed.
+
 There is no in-app simulated workstation path. Real Windows capture/input, mobile-data behavior and SOLIDWORKS geometry still require physical testing.
 
 ## Build and test

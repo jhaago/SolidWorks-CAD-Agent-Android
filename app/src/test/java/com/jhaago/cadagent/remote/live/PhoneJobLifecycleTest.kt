@@ -131,6 +131,37 @@ class PhoneJobLifecycleTest {
         assertTrue(task.canComplete)
         driver.close()
     }
+    @Test fun versionTwoPlanShowsAllStepsBeforeApprovalAndDoesNotOfferUnsupportedRevision() = runTest {
+        val server = Server().also { it.fixture = """{"id":"$jobId","prompt":"V2 rectangle boss: 20 x 10 x 5 mm; save as owned.sldprt","state":"AwaitingApproval","currentRevisionId":"$revision","currentRevisionNumber":1,"planValidated":true,"plan":{"planVersion":2,"summary":"Centred Top Plane rectangle and blind boss","assumptions":[],"ambiguities":[],"steps":[{"command":"NewPart","parameters":{}},{"command":"CreateSketch","parameters":{"plane":"Top Plane"}},{"command":"AddRectangle","parameters":{"centerXmm":0,"centerYmm":0,"widthMm":20,"heightMm":10}},{"command":"ExitSketch","parameters":{}},{"command":"Extrude","parameters":{"depthMm":5}},{"command":"SavePart","parameters":{"path":"owned.sldprt","allowOverwrite":false}}]},"verifications":[],"outputPath":null}""" }
+        val driver = LiveConnectionDriver(backgroundScope, server,
+            PairedWorkstation(RemoteEndpoint.parse("https://pc.example"), "device", "credential"),
+            { testScheduler.currentTime }, { true })
+        driver.setForeground(true); driver.connect(); runCurrent()
+        val task = driver.status.value.task
+        assertEquals(2, task.planVersion)
+        assertEquals(listOf("NewPart", "CreateSketch", "AddRectangle", "ExitSketch", "Extrude", "SavePart"),
+            task.proposedCommands.map { it.substringBefore(' ') })
+        assertTrue(task.proposedCommands[2].contains("widthMm"))
+        assertTrue(task.proposedCommands[5].contains("owned.sldprt"))
+        assertTrue(task.canApprove)
+        assertFalse(task.canRevise)
+        assertTrue(driver.approvePlan()); runCurrent()
+        assertEquals(revision, server.calls.single { it.route.endsWith("/approve") }.payload["revisionId"])
+        driver.close()
+    }
+    @Test fun versionTwoPlanWithoutDisplayableStepsCannotBeApprovedOnPhone() = runTest {
+        val server = Server().also { it.fixture = """{"id":"$jobId","prompt":"V2 rectangle boss","state":"AwaitingApproval","currentRevisionId":"$revision","currentRevisionNumber":1,"planValidated":true,"plan":{"planVersion":2,"summary":"Incomplete plan","ambiguities":[]},"verifications":[]}""" }
+        val driver = LiveConnectionDriver(backgroundScope, server,
+            PairedWorkstation(RemoteEndpoint.parse("https://pc.example"), "device", "credential"),
+            { testScheduler.currentTime }, { true })
+        driver.setForeground(true); driver.connect(); runCurrent()
+        assertEquals(2, driver.status.value.task.planVersion)
+        assertTrue(driver.status.value.task.proposedCommands.isEmpty())
+        assertFalse(driver.status.value.task.canApprove)
+        assertFalse(driver.approvePlan())
+        assertFalse(server.calls.any { it.route.endsWith("/approve") })
+        driver.close()
+    }
     @Test fun cancellationResponseMustConfirmTerminalStateBeforeManualControl() = runTest {
         val server = Server().also { it.state = "Executing" }
         val driver = LiveConnectionDriver(backgroundScope, server, PairedWorkstation(RemoteEndpoint.parse("https://pc.example"), "device", "credential"), { testScheduler.currentTime }, { true })

@@ -14,6 +14,8 @@ CAD Chat can attach one reference picture from the gallery or camera to a normal
 
 Version 0.4.1 displays the steps in a version-2 CAD plan before approval. The Windows Agent currently admits only `V2 rectangle boss: 20 x 10 x 5 mm; save as new-part.sldprt`-style requests: a new centred Top Plane rectangle, blind boss and non-overwriting save. Android hides in-place revision controls for this validated plan; submit a new task with a new filename to change it. This APK has passed local unit tests and lint, but a paired physical-phone run has not yet been performed.
 
+Version 0.4.2 keeps a pairing request open through temporary HTTPS failures while polling for Windows approval, with a longer connection window for pairing calls. It still fails closed on authorization errors or after the two-minute pairing deadline. This addresses the observed mobile-data pairing failure, but physical-phone confirmation is pending.
+
 There is no in-app simulated workstation path. Real Windows capture/input, mobile-data behavior and SOLIDWORKS geometry still require physical testing.
 
 ## Build and test

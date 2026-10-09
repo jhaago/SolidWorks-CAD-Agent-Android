@@ -17,9 +17,18 @@ class WorkstationSettingsTest {
     }
     private class Server : RemoteTransport {
         var state = "pending"
-        override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation) = RemoteResponse(200,
-            if (operation.route == "pair/request") """{"requestId":"request","receiptSecret":"receipt"}"""
-            else """{"state":"$state","deviceId":"device","credential":"credential"}""")
+        var transientPollFailures = 0
+        var authorizationFailure = false
+        var pollCount = 0
+        override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
+            if (operation.route == "pair/status") {
+                pollCount++
+                if (authorizationFailure) throw RemoteFailure(401, "http_error", "Pairing authorization ended.")
+                if (transientPollFailures-- > 0) throw RemoteFailure(0, "connection_failed", "Temporary secure connection failure.")
+            }
+            return RemoteResponse(200, if (operation.route == "pair/request") """{"requestId":"request","receiptSecret":"receipt"}"""
+                else """{"state":"$state","deviceId":"device","credential":"credential"}""")
+        }
     }
     @Test fun pairingWaitsForWindowsApprovalThenSelectsLiveWithoutChangingCadJobs() = runTest {
         val app = AppContainer(); val server = Server(); val store = Store()
@@ -52,6 +61,40 @@ class WorkstationSettingsTest {
         settings.cancelPairing(); server.state = "approved"; advanceTimeBy(2000); runCurrent()
         assertFalse(app.remoteAdapters.value.session.status.value.isLive)
         assertFalse(settings.state.value.pairing)
+    }
+    @Test fun transientSecurePollFailureDoesNotDiscardApprovedPairing() = runTest {
+        val app = AppContainer(); val server = Server().apply { transientPollFailures = 1 }; val store = Store()
+        val settings = WorkstationSettingsController(backgroundScope, app, server, store,
+            storageDispatcher = StandardTestDispatcher(testScheduler))
+        settings.changeEndpoint("https://pc.example"); settings.changePairingSecret("secret"); settings.pair(); runCurrent()
+        assertTrue(settings.state.value.pairing)
+        assertNull(settings.state.value.error)
+        server.state = "approved"; advanceTimeBy(1501); runCurrent()
+        assertTrue(settings.state.value.paired)
+        assertEquals(2, server.pollCount)
+        assertEquals("device", store.record?.deviceId)
+    }
+    @Test fun pairingAuthorizationFailureIsNotRetried() = runTest {
+        val server = Server().apply { authorizationFailure = true }
+        val settings = WorkstationSettingsController(backgroundScope, AppContainer(), server, Store(),
+            storageDispatcher = StandardTestDispatcher(testScheduler))
+        settings.changeEndpoint("https://pc.example"); settings.changePairingSecret("secret"); settings.pair(); runCurrent()
+        advanceTimeBy(5000); runCurrent()
+        assertFalse(settings.state.value.pairing)
+        assertEquals(1, server.pollCount)
+        assertNotNull(settings.state.value.error)
+    }
+    @Test fun persistentSecurePollFailureStopsAtPairingDeadline() = runTest {
+        val app = AppContainer(); val server = Server().apply { transientPollFailures = Int.MAX_VALUE }; val store = Store()
+        val settings = WorkstationSettingsController(backgroundScope, app, server, store,
+            storageDispatcher = StandardTestDispatcher(testScheduler))
+        settings.changeEndpoint("https://pc.example"); settings.changePairingSecret("secret"); settings.pair(); runCurrent()
+        advanceTimeBy(120001); runCurrent()
+        assertFalse(settings.state.value.pairing)
+        assertFalse(settings.state.value.paired)
+        assertNull(store.record)
+        assertEquals("Pairing expired. Open a new pairing window on Windows.", settings.state.value.error)
+        assertTrue(server.pollCount > 1)
     }
     @Test fun forgetClearsSelectedWorkstationAndSavedOriginWhenDisconnected() = runTest {
         val app = AppContainer()

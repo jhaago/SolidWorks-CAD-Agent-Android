@@ -42,7 +42,12 @@ class WorkstationSettingsController(
                 val receipt = pairingClient.request(endpoint, secret, "Android CAD Agent")
                 withTimeout(120000) {
                     while (isActive && id == revision) {
-                        val record = pairingClient.poll(endpoint, receipt)
+                        val record = try { pairingClient.poll(endpoint, receipt) }
+                        catch (error: RemoteFailure) {
+                            if (error.code != "connection_failed") throw error
+                            delay(1500)
+                            continue
+                        }
                         if (record != null) { if (id == revision) activate(record); break }
                         delay(1500)
                     }

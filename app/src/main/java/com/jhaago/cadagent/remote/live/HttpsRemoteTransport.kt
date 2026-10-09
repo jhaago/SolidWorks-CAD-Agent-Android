@@ -18,7 +18,7 @@ class HttpsRemoteTransport(private val open: (URL) -> HttpsURLConnection = { it.
             val readWindow = when { artifact || operation.route == "agent/jobs" -> 30000; lifecycle -> 15000; frame -> 5000; else -> 2000 }
             val limit = when { artifact -> 6 * 1024 * 1024; frame -> 3 * 1024 * 1024; lifecycle -> 512 * 1024; else -> 65536 }
             val deadline = System.nanoTime() + readWindow * 1_000_000L
-            connection.connectTimeout = 2000
+            connection.connectTimeout = if (operation.route == "pair/request" || operation.route == "pair/status") 10000 else 2000
             connection.readTimeout = readWindow
             connection.instanceFollowRedirects = false
             connection.useCaches = false

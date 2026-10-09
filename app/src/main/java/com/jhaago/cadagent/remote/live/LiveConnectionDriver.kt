@@ -447,6 +447,13 @@ class LiveConnectionDriver(
             try {
                 val latest = synchronized(gate) { grant } ?: return
                 refreshAgentStatus(id, latest)
+            } catch (error: CancellationException) { throw error }
+            catch (_: Exception) {
+                val latest = synchronized(gate) { grant } ?: return
+                markAgentUnavailable(id, latest)
+            }
+            try {
+                val latest = synchronized(gate) { grant } ?: return
                 refreshActiveJob(id, latest)
             } catch (error: CancellationException) { throw error }
             catch (_: Exception) {

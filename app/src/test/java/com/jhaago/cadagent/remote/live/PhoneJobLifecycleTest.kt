@@ -175,6 +175,30 @@ class PhoneJobLifecycleTest {
         assertEquals("Stopped", driver.status.value.task.phase.name)
         driver.close()
     }
+    @Test fun cancelledJobReleasesStoppingStateWhenSummaryRefreshFails() = runTest {
+        val server = Server()
+        var summaryUnavailable = false
+        val transport = object : RemoteTransport {
+            override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
+                if (operation.route.endsWith("/cancel"))
+                    throw RemoteFailure(409, "http_error", "The job already changed.")
+                if (operation.route == "agent/status" && summaryUnavailable)
+                    throw RemoteFailure(503, "http_error", "Workstation status unavailable.")
+                return server.call(endpoint, operation)
+            }
+        }
+        val driver = LiveConnectionDriver(backgroundScope, transport,
+            PairedWorkstation(RemoteEndpoint.parse("https://pc.example"), "device", "credential"),
+            { testScheduler.currentTime }, { true })
+        driver.setForeground(true); driver.connect(); runCurrent()
+        summaryUnavailable = true
+        server.state = "Cancelled"
+        driver.stopAiTask(); runCurrent()
+        assertEquals(AiTaskPhase.Stopping, driver.status.value.task.phase)
+        advanceTimeBy(1100); runCurrent()
+        assertEquals(AiTaskPhase.Stopped, driver.status.value.task.phase)
+        driver.close()
+    }
     @Test fun currentRevisionAndEvidenceArePresented() = runTest {
         val server = Server()
         val driver = LiveConnectionDriver(backgroundScope, server, PairedWorkstation(RemoteEndpoint.parse("https://pc.example"), "device", "credential"), { testScheduler.currentTime }, { true })

@@ -93,6 +93,8 @@ fun AiTaskPanel(
                         Text("Approve revision ${task.revisionNumber ?: ""}")
                     }
                 }
+                task.actionError?.let { Text(it, color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.testTag("cad-action-error")) }
                 if (task.verifications.isNotEmpty()) {
                     Text("Native verification", style = MaterialTheme.typography.titleSmall)
                     task.verifications.forEach {

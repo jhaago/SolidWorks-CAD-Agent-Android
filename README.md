@@ -16,6 +16,8 @@ Version 0.4.1 displays the steps in a version-2 CAD plan before approval. The Wi
 
 Version 0.4.2 keeps a pairing request open through temporary HTTPS failures while polling for Windows approval, with a longer connection window for pairing calls. It still fails closed on authorization errors or after the two-minute pairing deadline. This addresses the observed mobile-data pairing failure, but physical-phone confirmation is pending.
 
+Version 0.4.3 displays a failed CAD plan approval beside the current plan and keeps the error visible through status polling until the user retries or the plan changes. This makes a phone-side HTTPS or authorization failure diagnosable; approval execution still requires a separate physical-phone test.
+
 There is no in-app simulated workstation path. Real Windows capture/input, mobile-data behavior and SOLIDWORKS geometry still require physical testing.
 
 ## Build and test

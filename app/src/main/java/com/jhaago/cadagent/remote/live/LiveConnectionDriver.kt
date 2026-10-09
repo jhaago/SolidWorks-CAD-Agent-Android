@@ -236,7 +236,7 @@ class LiveConnectionDriver(
         val id = attempt
         val generation = aiGeneration
         mutationInFlight = true
-        mutableStatus.value = mutableStatus.value.copy(task = snapshot.copy(actionPending = true), message = "Sending job action…")
+        mutableStatus.value = mutableStatus.value.copy(task = snapshot.copy(actionPending = true, actionError = null), message = "Sending job action…")
         work.launch {
             try {
                 val job = readJob(transport.call(workstation.endpoint, RemoteOperation("agent/jobs/$jobId/$route", "POST", "Session", captured.token, payload(snapshot))).body)
@@ -250,7 +250,9 @@ class LiveConnectionDriver(
             catch (error: Exception) {
                 synchronized(gate) {
                     if (current(id) && grant?.token == captured.token && generation == aiGeneration && mutableStatus.value.task.id == jobId)
-                        mutableStatus.value = mutableStatus.value.copy(message = safeAgentMessage(error))
+                        mutableStatus.value = mutableStatus.value.copy(
+                            task = mutableStatus.value.task.copy(actionError = safeAgentMessage(error)),
+                            message = safeAgentMessage(error))
                 }
             } finally {
                 synchronized(gate) {
@@ -491,7 +493,7 @@ class LiveConnectionDriver(
                 activeDocument = runtime.activeDocument,
                 mode = nextMode,
                 controller = if (nextTask.active && nextMode == RemoteControlMode.Agent) RemoteController.Ai else mutableStatus.value.controller,
-                task = nextTask,
+                task = retainActionError(currentTask, nextTask),
             )
             if (recoveringSubmission && stopRequestedGeneration != null && remoteTask?.id != null) {
                 val generation = aiGeneration
@@ -522,7 +524,7 @@ class LiveConnectionDriver(
         val mode = mutableStatus.value.mode
         mutableStatus.value = mutableStatus.value.copy(
             controller = if (job.active && mode == RemoteControlMode.Agent) RemoteController.Ai else RemoteController.None,
-            task = job.copy(actionPending = mutationInFlight),
+            task = retainActionError(mutableStatus.value.task, job).copy(actionPending = mutationInFlight),
             message = job.message,
         )
         if (!job.active) stopRequestedGeneration = null
@@ -749,6 +751,11 @@ class LiveConnectionDriver(
         if (!has(name) || isNull(name)) return null
         return get(name).toString().also { require(it.length <= maxLength) }
     }
+
+    private fun retainActionError(previous: AiTaskState, next: AiTaskState): AiTaskState =
+        if (previous.id == next.id && previous.revisionId == next.revisionId && previous.phase == next.phase)
+            next.copy(actionError = previous.actionError)
+        else next
 
     private fun JSONObject.optionalString(name: String, maxLength: Int): String? {
         if (!has(name) || isNull(name)) return null

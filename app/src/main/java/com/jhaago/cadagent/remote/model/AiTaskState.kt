@@ -20,6 +20,7 @@ data class AiTaskState(
     val outputPath: String? = null,
     val planValidated: Boolean = false,
     val actionPending: Boolean = false,
+    val actionError: String? = null,
 ) {
     val active: Boolean get() = phase in setOf(AiTaskPhase.Running, AiTaskPhase.Stopping, AiTaskPhase.AwaitingProtectedAction,
         AiTaskPhase.AwaitingClarification, AiTaskPhase.AwaitingApproval, AiTaskPhase.ReadyForReview)

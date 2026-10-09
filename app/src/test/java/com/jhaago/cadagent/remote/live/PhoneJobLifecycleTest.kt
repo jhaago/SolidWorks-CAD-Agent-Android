@@ -162,6 +162,26 @@ class PhoneJobLifecycleTest {
         assertFalse(server.calls.any { it.route.endsWith("/approve") })
         driver.close()
     }
+    @Test fun failedApprovalStaysVisibleWhileThePlanIsStillAwaitingApproval() = runTest {
+        val server = Server()
+        val transport = object : RemoteTransport {
+            override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
+                if (operation.route.endsWith("/approve")) throw RemoteFailure(503, "unavailable", "Approval could not reach the workstation")
+                return server.call(endpoint, operation)
+            }
+        }
+        val driver = LiveConnectionDriver(backgroundScope, transport,
+            PairedWorkstation(RemoteEndpoint.parse("https://pc.example"), "device", "credential"),
+            { testScheduler.currentTime }, { true })
+        driver.setForeground(true); driver.connect(); runCurrent()
+        assertTrue(driver.approvePlan()); runCurrent()
+        assertFalse(driver.status.value.task.actionPending)
+        assertNotNull(driver.status.value.task.actionError)
+        advanceTimeBy(1100); runCurrent()
+        assertNotNull("Polling must not erase the actionable error", driver.status.value.task.actionError)
+        assertTrue(driver.status.value.task.canApprove)
+        driver.close()
+    }
     @Test fun cancellationResponseMustConfirmTerminalStateBeforeManualControl() = runTest {
         val server = Server().also { it.state = "Executing" }
         val driver = LiveConnectionDriver(backgroundScope, server, PairedWorkstation(RemoteEndpoint.parse("https://pc.example"), "device", "credential"), { testScheduler.currentTime }, { true })

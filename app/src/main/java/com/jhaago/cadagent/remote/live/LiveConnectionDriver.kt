@@ -114,6 +114,8 @@ class LiveConnectionDriver(
                         if (!current(id)) return@launch
                         val old = grant
                         invalidateAuthority()
+                        mutationInFlight = false
+                        submissionInFlight = false
                         grant = null
                         runtime = null
                         mutableFrame.value = null
@@ -127,6 +129,11 @@ class LiveConnectionDriver(
     }
 
     private fun current(id: Long) = synchronized(gate) { id == attempt && wanted && foreground }
+
+    // Response ownership survives token renewal, but never a different connection or session.
+    // Call under gate so session selection and the resulting state change stay atomic.
+    private fun ownsSession(id: Long, captured: Grant) =
+        id == attempt && wanted && foreground && grant?.session?.id == captured.session.id
 
     private fun stopConnection(keepWanted: Boolean) {
         if (!keepWanted) wanted = false
@@ -194,22 +201,29 @@ class LiveConnectionDriver(
                     "image" to mapOf("mediaType" to "image/jpeg", "dataBase64" to Base64.getEncoder().encodeToString(photo.jpegBytes)))
                 val job = readJob(transport.call(workstation.endpoint, RemoteOperation("agent/jobs", "POST", "Session", captured.token, payload)).body)
                 val shouldCancel = synchronized(gate) {
-                    if (!current(id) || grant?.token != captured.token || generation != aiGeneration) return@synchronized true
+                    if (!ownsSession(id, captured) || generation != aiGeneration) return@launch
+                    submissionInFlight = false
                     if (stopRequestedGeneration == generation) true
                     else {
                         applyJob(job, generation)
                         false
                     }
                 }
-                synchronized(gate) { if (generation == aiGeneration) submissionInFlight = false }
                 if (shouldCancel) cancelCreatedJob(id, captured, generation, job)
             } catch (error: CancellationException) { throw error }
             catch (error: Exception) {
                 synchronized(gate) {
-                    if (generation == aiGeneration) {
+                    if (ownsSession(id, captured) && generation == aiGeneration) {
+                        // These responses reject the request before a job is accepted. A timeout
+                        // or server failure can lose an accepted receipt, so it stays uncertain.
+                        val rejected = error is RemoteFailure && error.status in setOf(400, 401, 403, 404, 405, 409, 413, 415, 422, 429)
+                        if (rejected) stopRequestedGeneration = null
                         mutableStatus.value = mutableStatus.value.copy(
                             controller = RemoteController.None,
-                            task = mutableStatus.value.task.copy(phase = if (stopRequestedGeneration == generation) AiTaskPhase.Stopping else AiTaskPhase.Running, message = "Submission result is uncertain. Checking the workstation…"),
+                            task = mutableStatus.value.task.copy(
+                                id = if (rejected) null else mutableStatus.value.task.id,
+                                phase = if (rejected) AiTaskPhase.Stopped else if (stopRequestedGeneration == generation) AiTaskPhase.Stopping else AiTaskPhase.Running,
+                                message = if (rejected) safeAgentMessage(error) else "Submission result is uncertain. Checking the workstation…"),
                             message = safeAgentMessage(error),
                         )
                         submissionInFlight = false
@@ -241,7 +255,7 @@ class LiveConnectionDriver(
             try {
                 val job = readJob(transport.call(workstation.endpoint, RemoteOperation("agent/jobs/$jobId/$route", "POST", "Session", captured.token, payload(snapshot))).body)
                 synchronized(gate) {
-                    if (!current(id) || grant?.token != captured.token || generation != aiGeneration || mutableStatus.value.task.id != jobId) return@synchronized
+                    if (!ownsSession(id, captured) || generation != aiGeneration || mutableStatus.value.task.id != jobId) return@synchronized
                     mutationInFlight = false
                     // An accepted plan action runs in the host background; polling follows its durable state.
                     if (mutableStatus.value.task.phase != AiTaskPhase.Stopping) applyJob(job, generation)
@@ -249,14 +263,14 @@ class LiveConnectionDriver(
             } catch (error: CancellationException) { throw error }
             catch (error: Exception) {
                 synchronized(gate) {
-                    if (current(id) && grant?.token == captured.token && generation == aiGeneration && mutableStatus.value.task.id == jobId)
+                    if (ownsSession(id, captured) && generation == aiGeneration && mutableStatus.value.task.id == jobId)
                         mutableStatus.value = mutableStatus.value.copy(
                             task = mutableStatus.value.task.copy(actionError = safeAgentMessage(error)),
                             message = safeAgentMessage(error))
                 }
             } finally {
                 synchronized(gate) {
-                    if (current(id) && grant?.token == captured.token && generation == aiGeneration && mutableStatus.value.task.id == jobId) {
+                    if (ownsSession(id, captured) && generation == aiGeneration && mutableStatus.value.task.id == jobId) {
                         mutationInFlight = false
                         mutableStatus.value = mutableStatus.value.copy(task = mutableStatus.value.task.copy(actionPending = false))
                     }
@@ -283,7 +297,7 @@ class LiveConnectionDriver(
             AiArtifact(name, bytes)
         }
         return synchronized(gate) {
-            if (current(dispatch.first) && grant?.token == dispatch.second.token && mutableStatus.value.task.id == dispatch.third) artifact else null
+            if (ownsSession(dispatch.first, dispatch.second) && mutableStatus.value.task.id == dispatch.third) artifact else null
         }
     }
 
@@ -309,16 +323,21 @@ class LiveConnectionDriver(
     private suspend fun cancelCreatedJob(id: Long, captured: Grant, generation: Long, job: AiTaskState) {
         val jobId = job.id ?: return
         synchronized(gate) {
-            if (generation == aiGeneration && current(id)) mutableStatus.value = mutableStatus.value.copy(task = job.copy(phase = AiTaskPhase.Stopping))
+            if (!ownsSession(id, captured) || generation != aiGeneration) return
+            mutableStatus.value = mutableStatus.value.copy(task = job.copy(phase = AiTaskPhase.Stopping))
         }
         cancelKnownJob(id, captured, generation, jobId)
     }
 
     private suspend fun cancelKnownJob(id: Long, captured: Grant, generation: Long, jobId: String) {
+        val latest = synchronized(gate) {
+            if (!ownsSession(id, captured) || generation != aiGeneration || mutableStatus.value.task.id != jobId) return
+            grant!!
+        }
         try {
-            val cancelled = readJob(transport.call(workstation.endpoint, RemoteOperation("agent/jobs/$jobId/cancel", "POST", "Session", captured.token)).body)
+            val cancelled = readJob(transport.call(workstation.endpoint, RemoteOperation("agent/jobs/$jobId/cancel", "POST", "Session", latest.token)).body)
             synchronized(gate) {
-                if (!current(id) || grant?.token != captured.token || generation != aiGeneration) return@synchronized
+                if (!ownsSession(id, captured) || generation != aiGeneration || mutableStatus.value.task.id != jobId) return@synchronized
                 mutableStatus.value = mutableStatus.value.copy(
                     controller = RemoteController.None,
                     task = if (!cancelled.active) cancelled else cancelled.copy(phase = AiTaskPhase.Stopping, message = "Cancellation not yet confirmed"),
@@ -329,7 +348,7 @@ class LiveConnectionDriver(
         } catch (error: CancellationException) { throw error }
         catch (error: Exception) {
             synchronized(gate) {
-                if (generation == aiGeneration) {
+                if (ownsSession(id, captured) && generation == aiGeneration && mutableStatus.value.task.id == jobId) {
                     mutableStatus.value = mutableStatus.value.copy(
                         controller = RemoteController.None,
                         task = mutableStatus.value.task.copy(phase = AiTaskPhase.Stopping, message = "Cancellation not yet confirmed"),
@@ -355,9 +374,12 @@ class LiveConnectionDriver(
             try {
                 val session = readSession(JSONObject(transport.call(workstation.endpoint, RemoteOperation("session/resume", "POST", "Session", captured.token)).body))
                 synchronized(gate) {
-                    if (!current(id) || version != controlVersion || grant?.token != captured.token) return@launch
-                    if (!freshFrame() || !session.controlling) { releaseAll(); return@launch }
-                    grant = Grant(captured.token, session)
+                    if (!ownsSession(id, captured) || version != controlVersion) return@launch
+                    val latest = grant!!
+                    if (session.id != latest.session.id || session.epoch < latest.session.epoch || !freshFrame() || !session.controlling) {
+                        releaseAll(); return@launch
+                    }
+                    grant = Grant(latest.token, session)
                     sequence = 0
                     allowInput = true
                     mutableStatus.value = mutableStatus.value.copy(controller = RemoteController.User, mode = RemoteControlMode.Manual, controlPending = false, message = "Manual control active")
@@ -366,7 +388,7 @@ class LiveConnectionDriver(
             } catch (error: CancellationException) { throw error }
             catch (error: Exception) {
                 synchronized(gate) {
-                    if (version == controlVersion) {
+                    if (ownsSession(id, captured) && version == controlVersion) {
                         releaseAll()
                         mutableStatus.value = mutableStatus.value.copy(controlPending = false, message = safeMessage(error))
                     }

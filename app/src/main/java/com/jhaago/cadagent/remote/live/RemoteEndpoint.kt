@@ -6,13 +6,17 @@ import java.util.Locale
 
 class RemoteEndpoint private constructor(val origin: String) {
     fun url(route: String): URL {
-        require(route.matches(Regex("[a-z-]+/[a-z-]+")) || route == "input") { "Unsupported remote route" }
+        require(route in routes || jobRoute.matches(route)) { "Unsupported remote route" }
         return URL("$origin/remote/v1/$route")
     }
     override fun toString() = origin
     override fun equals(other: Any?) = other is RemoteEndpoint && origin == other.origin
     override fun hashCode() = origin.hashCode()
     companion object {
+        private val routes = setOf("pair/request", "pair/status", "session/create", "session/renew", "session/status",
+            "session/heartbeat", "session/resume", "session/take-control", "session/release", "session/close",
+            "display/frame", "input", "agent/status", "agent/jobs")
+        private val jobRoute = Regex("agent/jobs/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?:/(?:approve|request-changes|complete|cancel|artifact))?")
         fun parse(value: String): RemoteEndpoint {
             try {
                 require(value.length <= 512)

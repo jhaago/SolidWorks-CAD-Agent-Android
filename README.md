@@ -20,6 +20,14 @@ Version 0.4.3 displays a failed CAD plan approval beside the current plan and ke
 
 There is no in-app simulated workstation path. Real Windows capture/input, mobile-data behavior and SOLIDWORKS geometry still require physical testing.
 
+## Engineering review — 10 October 2026
+
+The review starts at `7c636f5` on `feature/phone-first-v2` (0.4.3/code 7). This local revision fixes the production endpoint rejecting GUID job routes; definite HTTP rejection leaving a pending task; and token renewal/reconnect races in submission, approval/revision actions, manual control, cancellation and artifact download. Responses use stable session/connection/action ownership, while current tokens and server authority remain enforced. Old-session responses cannot update a new action.
+
+Final local verification: **123 JVM tests passed**, debug and instrumentation APKs built, and lint completed with **0 errors and 17 warnings**. Regressions were observed failing before correction. Evidence is in `build/review-logs/android-final-verification.log`, `app/build/test-results/testDebugUnitTest`, and `app/build/reports/lint-results-debug.xml`. The APK is a local test artifact; this revision was not published, deployed, installed or physically tested.
+
+Remaining P2: uncertain submissions still reconcile by prompt equality; replace that with a durable client submission ID across phone/proxy/Host. Physical acceptance must cover paired create/detail/approve/revise/cancel/complete/download, renewal during each action, reconnect, Wi-Fi/mobile transitions and manual-control exclusion during CAD execution. Instrumentation APK compilation does not prove device behavior. The companion Windows review and unresolved CAD verification limits are recorded in its existing CAD_AGENT_ARCHITECTURE.md and CAD_IMPLEMENTATION_STATUS.md.
+
 ## Build and test
 
 Requires JDK 17, Gradle 9.6.0 and Android SDK platform 36 / build-tools 36.0.0. The repository currently uses installed Gradle, matching CI.

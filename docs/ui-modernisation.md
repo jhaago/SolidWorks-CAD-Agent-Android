@@ -60,6 +60,15 @@ gradle connectedDebugAndroidTest
 
 ## Phone acceptance
 
+GitHub APK prerelease: [Android 0.4.4](https://github.com/jhaago/SolidWorks-CAD-Agent-Android/releases/tag/android-v0.4.4-preview).
+The published APK was signed with the existing local debug key, and its public
+certificate matches the 0.4.2 GitHub APK. No private key was uploaded. APK SHA-256:
+`5ea9e3aab605eed11be5790c317e258e2d38e64b2ab27e9ab690ee859580e19c`.
+Only the APK and release notes were published. Automatic approval review rejected
+source-tree publication because the user requested an APK link. Source remains
+local; the prerelease tag anchors the already-published `7c636f5` baseline,
+and release notes explicitly distinguish that tag from APK source `dc71b0f`.
+
 1. Transfer `CAD-Agent-Android-0.4.4-debug.apk` to an Android 8+ phone and open
    it. Allow APK installation for that file source if Android requests it.
    An update can retain existing pairing when the installed APK uses the same

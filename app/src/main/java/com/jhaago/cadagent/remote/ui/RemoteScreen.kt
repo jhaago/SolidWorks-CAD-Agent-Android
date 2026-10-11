@@ -13,6 +13,8 @@ import androidx.compose.ui.window.DialogProperties
 import com.jhaago.cadagent.remote.input.*
 import com.jhaago.cadagent.remote.model.*
 import com.jhaago.cadagent.remote.ui.components.*
+import com.jhaago.cadagent.ui.theme.*
+import androidx.compose.ui.Alignment
 
 @Composable
 fun RemoteScreen(state: RemoteUiState, actions: RemoteViewModel) {
@@ -23,22 +25,24 @@ fun RemoteScreen(state: RemoteUiState, actions: RemoteViewModel) {
     val available = state.connected && (!state.session.isLive || state.session.controller == RemoteController.User) && !state.session.task.active && !state.session.controlPending
     LaunchedEffect(available) { if (!available) { control = false; actions.cancelInput() } }
     fun changeControl(value: Boolean) { actions.cancelInput(); control = value && available }
-    Column(Modifier.fillMaxSize().testTag("remote-screen")) {
-        Text("Remote desktop", Modifier.padding(start = 20.dp, top = 16.dp, bottom = 8.dp), style = MaterialTheme.typography.headlineSmall)
+    Column(Modifier.fillMaxSize().testTag("remote-screen"), horizontalAlignment = Alignment.CenterHorizontally) {
         LazyColumn(
-            Modifier.weight(1f).fillMaxWidth().padding(horizontal = 20.dp).testTag("remote-content"),
+            Modifier.weight(1f).widthIn(max = 1080.dp).fillMaxWidth().padding(horizontal = 20.dp).testTag("remote-content"),
             verticalArrangement = Arrangement.spacedBy(16.dp),
             contentPadding = PaddingValues(vertical = 16.dp),
         ) {
+            item { ScreenHeader("Remote desktop", "Your Windows workspace, wherever you are", CadIcons.Desktop, horizontalPadding = 0.dp) }
             item {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("${state.session.workstationName} · ${state.session.connection}", Modifier.testTag("connection-status"), style = MaterialTheme.typography.bodyMedium)
+                WorkspaceCard {
+                    SectionHeading("Workstation connection")
+                    Text("${state.session.workstationName} · ${state.session.connection}", Modifier.testTag("connection-status"), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (state.session.connection == RemoteConnectionState.Connecting) LinearProgressIndicator(Modifier.fillMaxWidth())
                     if (!state.session.isLive) {
                         Text("Pair a workstation in Settings before connecting.", Modifier.testTag("unpaired-workstation"))
                     } else if (state.session.connection == RemoteConnectionState.Disconnected) {
                         Button(onClick = actions::connect, modifier = Modifier.testTag("connect-remote")) { Text("Connect") }
                     } else {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             OutlinedButton(onClick = actions::disconnect, enabled = !state.session.task.active,
                                 modifier = Modifier.testTag("disconnect-remote")) { Text("Disconnect") }
                             if (state.connected && state.frame != null && !state.session.task.active)
@@ -51,19 +55,23 @@ fun RemoteScreen(state: RemoteUiState, actions: RemoteViewModel) {
                                     modifier = Modifier.testTag("stop-ai")) { Text("Stop CAD task") }
                         }
                         if (state.connected) {
-                            Text(when {
+                            StatusPill(when {
                                 state.session.task.active -> "CAD task running · view only"
                                 state.session.controller == RemoteController.User -> "You control the desktop"
                                 else -> "Viewing only"
-                            }, Modifier.testTag("controller"), style = MaterialTheme.typography.bodySmall)
+                            }, Modifier.testTag("controller"))
                             Text(if (state.session.solidWorksAttached) "SOLIDWORKS attached" else "SOLIDWORKS unavailable",
                                 Modifier.testTag("solidworks-status"), style = MaterialTheme.typography.bodySmall)
                         }
                     }
+                    state.session.message?.let { Notice(it) }
+                    state.error?.let { Notice(it, error = true) }
                 }
             }
             if (state.connected && state.frame != null) {
                 item {
+                  WorkspaceCard {
+                    SectionHeading("Live desktop", "View with pinch and pan. Input requires explicit control.")
                     RemoteDisplaySurface(
                         state.frame,
                         actions::pointer,
@@ -71,12 +79,22 @@ fun RemoteScreen(state: RemoteUiState, actions: RemoteViewModel) {
                         actions::cancelInput,
                         viewResetKey = viewResetKey,
                     )
+                  }
                 }
                 item {
+                  WorkspaceCard {
+                    SectionHeading("Desktop controls")
                     OutlinedButton(onClick = { actions.cancelInput(); fullScreen = true }, modifier = Modifier.testTag("enter-full-screen")) { Text("Full screen") }
                     DesktopControls(control, available, ::changeControl, state.frame.cursorX, state.frame.cursorY, actions::pointer, actions::keyboard)
                     TextButton(onClick = { actions.cancelInput(); viewResetKey++ }) { Text("Fit desktop") }
-                    Text(state.inputMessage, style = MaterialTheme.typography.bodySmall)
+                    Text(state.inputMessage, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                  }
+                }
+            } else item {
+                WorkspaceCard {
+                    SectionHeading(if (state.connected) "Waiting for desktop" else "Your live desktop appears here")
+                    Text(if (state.connected) "The workstation has not supplied a display frame yet." else "Connect a paired workstation to inspect models and use Windows tools.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Notice("Remote opens in view-only mode. Take control when you need to interact with the PC.")
                 }
             }
         }
@@ -85,7 +103,7 @@ fun RemoteScreen(state: RemoteUiState, actions: RemoteViewModel) {
         Dialog(onDismissRequest = { actions.cancelInput(); fullScreen = false }, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
             Surface(Modifier.fillMaxSize().testTag("full-screen-desktop")) {
                 Column(Modifier.fillMaxSize().safeDrawingPadding()) {
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                    FlowRow(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(onClick = { actions.cancelInput(); fullScreen = false }, modifier = Modifier.testTag("exit-full-screen")) { Text("Exit") }
                         TextButton(onClick = { actions.cancelInput(); viewResetKey++ }) { Text("Fit") }
                         TextButton(onClick = actions::stopTask, enabled = state.session.task.active, modifier = Modifier.testTag("fullscreen-stop-ai")) { Text("Stop AI") }

@@ -28,6 +28,20 @@ Final local verification: **123 JVM tests passed**, debug and instrumentation AP
 
 Remaining P2: uncertain submissions still reconcile by prompt equality; replace that with a durable client submission ID across phone/proxy/Host. Physical acceptance must cover paired create/detail/approve/revise/cancel/complete/download, renewal during each action, reconnect, Wi-Fi/mobile transitions and manual-control exclusion during CAD execution. Instrumentation APK compilation does not prove device behavior. The companion Windows review and unresolved CAD verification limits are recorded in its existing CAD_AGENT_ARCHITECTURE.md and CAD_IMPLEMENTATION_STATUS.md.
 
+## UI modernisation — 11 October 2026
+
+Version **0.4.4 / code 8** introduces a consistent dark engineering workspace:
+cyan accents, vector navigation icons, bordered cards, accessible headings,
+structured operation/verification review, and grouped workstation settings.
+CAD Chat now links directly to pairing when unpaired. Remote actions wrap on
+small screens. Revision drafts survive lazy-list scrolling and the download
+picker belongs to the screen, independent of review-card visibility.
+
+Pairing, credentials, transport, controllers, CAD validation and execution
+authority are unchanged. No dependencies were added. The companion still
+requires its existing paired Windows HTTPS service; the localhost desktop Host
+is not a phone endpoint. See [UI changes and phone acceptance](docs/ui-modernisation.md).
+
 ## Build and test
 
 Requires JDK 17, Gradle 9.6.0 and Android SDK platform 36 / build-tools 36.0.0. The repository currently uses installed Gradle, matching CI.

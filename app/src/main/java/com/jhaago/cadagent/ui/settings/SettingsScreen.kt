@@ -10,6 +10,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.jhaago.cadagent.ui.theme.*
 
 @Composable
 fun SettingsScreen(
@@ -19,7 +20,7 @@ fun SettingsScreen(
         modifier = modifier.padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Text("Settings", style = MaterialTheme.typography.headlineLarge)
+        ScreenHeader("Workspace settings", "Your trusted Windows workstation", CadIcons.Settings)
 
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {

@@ -14,7 +14,7 @@ import com.jhaago.cadagent.remote.input.*
 fun DesktopControls(control: Boolean, available: Boolean, onControl: (Boolean) -> Unit,
     cursorX: Float, cursorY: Float, onPointer: (RemotePointerEvent) -> Boolean,
     onKeyboard: (RemoteKeyboardEvent) -> Boolean) {
-    Column {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(!control, { onControl(false) }, label = { Text("View · pinch / pan") }, modifier = Modifier.testTag("desktop-view-mode"))
             FilterChip(control, { onControl(true) }, enabled = available, label = { Text("Control · touch / drag") }, modifier = Modifier.testTag("desktop-control-mode"))

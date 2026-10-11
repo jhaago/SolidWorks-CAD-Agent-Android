@@ -18,14 +18,18 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.jhaago.cadagent.remote.model.RemoteConnectionState
 import com.jhaago.cadagent.remote.ui.components.AiTaskPanel
+import com.jhaago.cadagent.remote.ui.components.ArtifactSaveEffect
+import com.jhaago.cadagent.ui.theme.*
+import androidx.compose.ui.Alignment
 import java.io.File
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
 
 @Composable
-fun CadChatScreen(state: RemoteUiState, actions: RemoteViewModel) {
+fun CadChatScreen(state: RemoteUiState, actions: RemoteViewModel, onOpenSettings: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    ArtifactSaveEffect(state.artifact, actions::artifactSaved)
     var showPhotoChoice by remember { mutableStateOf(false) }
     var cameraPath by rememberSaveable { mutableStateOf<String?>(null) }
     fun attach(uri: Uri, deleteAfter: File? = null) {
@@ -71,32 +75,51 @@ fun CadChatScreen(state: RemoteUiState, actions: RemoteViewModel) {
             }, modifier = Modifier.testTag("take-photo")) { Text("Camera") }
         },
     )
-    Column(Modifier.fillMaxSize().testTag("cad-chat-screen")) {
-        Text("CAD Chat", Modifier.padding(start = 20.dp, top = 16.dp, bottom = 8.dp), style = MaterialTheme.typography.headlineSmall)
+    Column(Modifier.fillMaxSize().imePadding().testTag("cad-chat-screen"), horizontalAlignment = Alignment.CenterHorizontally) {
         LazyColumn(
-            Modifier.fillMaxSize().padding(horizontal = 20.dp).testTag("cad-chat-content"),
+            Modifier.weight(1f).widthIn(max = 840.dp).fillMaxWidth().padding(horizontal = 20.dp).testTag("cad-chat-content"),
             verticalArrangement = Arrangement.spacedBy(16.dp),
             contentPadding = PaddingValues(vertical = 16.dp),
         ) {
-            item {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            item(key = "header") { ScreenHeader("CAD Chat", "Describe. Review. Build.", CadIcons.Model, horizontalPadding = 0.dp) }
+            item(key = "connection") {
+                WorkspaceCard {
+                    SectionHeading("Workstation", if (state.session.isLive) state.session.workstationName else "Connect your engineering workspace")
                     Text(
                         when {
                             !state.session.isLive -> "No workstation paired"
+                            state.session.connection == RemoteConnectionState.Connecting -> "Connecting to workstation…"
                             !state.connected -> "Workstation disconnected"
                             state.session.solidWorksAttached -> "Connected · SOLIDWORKS attached"
                             else -> "Connected · SOLIDWORKS unavailable"
                         },
-                        modifier = Modifier.weight(1f).testTag("cad-connection-status"),
+                        modifier = Modifier.testTag("cad-connection-status"),
                         style = MaterialTheme.typography.bodyMedium,
+                        color = if (state.connected) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     if (state.session.isLive && state.session.connection == RemoteConnectionState.Disconnected)
                         TextButton(onClick = actions::connect, modifier = Modifier.testTag("cad-connect")) { Text("Connect") }
+                    if (state.session.connection == RemoteConnectionState.Connecting) LinearProgressIndicator(Modifier.fillMaxWidth())
+                    if (!state.session.isLive) {
+                        Text("Pair a workstation in Settings to send CAD requests.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Button(onClick = onOpenSettings, modifier = Modifier.fillMaxWidth().testTag("open-pairing-settings")) { Text("Set up workstation") }
+                    }
                 }
-                if (!state.session.isLive) Text("Pair a workstation in Settings to send CAD requests.")
             }
-            if (state.session.isLive) item {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (!state.session.isLive) item(key = "intro") {
+                WorkspaceCard {
+                    SectionHeading("From an idea to a CAD model", "Send dimensions or a reference picture to your paired PC.")
+                    Text("01  Describe the part and its dimensions", style = MaterialTheme.typography.bodyMedium)
+                    Text("02  Clarify requirements and review the plan", style = MaterialTheme.typography.bodyMedium)
+                    Text("03  Approve, inspect and download the result", style = MaterialTheme.typography.bodyMedium)
+                    Notice("Planning and execution run on Windows. You review and approve the work here.")
+                }
+            }
+            if (state.session.isLive) {
+              item(key = "reference") {
+                WorkspaceCard {
+                  SectionHeading("Reference picture", "Optional · gallery or camera")
+                  FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     OutlinedButton(onClick = { showPhotoChoice = true }, enabled = !state.session.task.active && !state.photoLoading,
                         modifier = Modifier.testTag("add-picture")) { Text("Add picture") }
                     if (state.photo != null) TextButton(onClick = actions::removePhoto,
@@ -115,10 +138,14 @@ fun CadChatScreen(state: RemoteUiState, actions: RemoteViewModel) {
                             color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
                 if (state.photoLoading) LinearProgressIndicator(Modifier.fillMaxWidth().testTag("photo-loading"))
+                }
+              }
+              item(key = "task") {
                 AiTaskPanel(state, actions::changeInstruction, actions::runTask,
                     onApprove = actions::approvePlan, onRequestChanges = actions::requestChanges,
                     onComplete = actions::completeTask, onDownload = actions::downloadArtifact,
-                    onArtifactSaved = actions::artifactSaved, onStop = actions::stopTask)
+                    onStop = actions::stopTask)
+              }
             }
         }
     }

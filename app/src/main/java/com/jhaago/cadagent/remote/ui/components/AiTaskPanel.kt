@@ -2,82 +2,85 @@ package com.jhaago.cadagent.remote.ui.components
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
-import androidx.compose.ui.platform.LocalContext
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.jhaago.cadagent.remote.model.*
 import com.jhaago.cadagent.remote.ui.RemoteUiState
+import com.jhaago.cadagent.ui.theme.*
+import androidx.compose.foundation.text.selection.SelectionContainer
 
 @Composable
 fun AiTaskPanel(
     state: RemoteUiState, onInstruction: (String) -> Unit, onRun: () -> Unit,
     onApprove: () -> Unit = {}, onRequestChanges: (String) -> Unit = {}, onComplete: () -> Unit = {},
-    onDownload: () -> Unit = {}, onArtifactSaved: (String?) -> Unit = {}, onStop: () -> Unit = {},
+    onDownload: () -> Unit = {}, onStop: () -> Unit = {},
 ) {
     val task = state.session.task
-    var changes by remember(task.id, task.revisionId) { mutableStateOf("") }
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val artifact by rememberUpdatedState(state.artifact)
-    val saved by rememberUpdatedState(onArtifactSaved)
-    val saveFile = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
-        val file = artifact
-        if (uri == null || file == null) saved(null)
-        else scope.launch {
-            val error = withContext(Dispatchers.IO) {
-                try {
-                    val output = context.contentResolver.openOutputStream(uri) ?: error("Destination unavailable")
-                    output.use { it.write(file.bytes) }
-                    null
-                } catch (_: Exception) { "Could not save the native file to that destination." }
-            }
-            saved(error)
-        }
-    }
-    LaunchedEffect(state.artifact) { state.artifact?.let { saveFile.launch(it.fileName) } }
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Describe the CAD work", style = MaterialTheme.typography.titleMedium)
-            Text("Review the proposed plan before the workstation changes a model.")
+    var changes by rememberSaveable(task.id, task.revisionId) { mutableStateOf("") }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        WorkspaceCard {
+            SectionHeading("Design request", "Describe the part, dimensions and feature intent.")
             OutlinedTextField(
                 value = state.instruction,
                 onValueChange = onInstruction,
                 label = { Text("CAD instruction") },
                 enabled = !state.session.task.active,
-                maxLines = 3,
+                minLines = 3, maxLines = 6,
                 modifier = Modifier.fillMaxWidth().testTag("ai-instruction"),
                 isError = state.error != null,
             )
-            state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            Button(onClick = onRun, enabled = state.canRunTask, modifier = Modifier.testTag("run-ai-task")) {
+            state.error?.let { Notice(it, error = true) }
+            Button(onClick = onRun, enabled = state.canRunTask, modifier = Modifier.fillMaxWidth().testTag("run-ai-task")) {
                 Text("Prepare CAD plan")
             }
-            Text(state.session.task.message, Modifier.testTag("ai-task-status"))
+            Text("Review the proposed plan before the workstation changes a model.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        WorkspaceCard {
+            SectionHeading("Build & review")
+            StatusPill(when (task.phase) {
+                AiTaskPhase.Idle -> "Ready for a design"
+                AiTaskPhase.Running -> "Work in progress"
+                AiTaskPhase.Stopping -> "Stopping task"
+                AiTaskPhase.AwaitingClarification -> "Clarification needed"
+                AiTaskPhase.AwaitingApproval -> "Awaiting your approval"
+                AiTaskPhase.ReadyForReview -> "Ready for review"
+                AiTaskPhase.AwaitingProtectedAction -> "Protected action paused"
+                AiTaskPhase.Completed -> "Completed"
+                AiTaskPhase.Stopped -> "Stopped"
+            }, color = if (task.phase in setOf(AiTaskPhase.ReadyForReview, AiTaskPhase.Completed)) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary)
+            Text(state.session.task.message, Modifier.testTag("ai-task-status"), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (task.phase in setOf(AiTaskPhase.Running, AiTaskPhase.Stopping)) LinearProgressIndicator(Modifier.fillMaxWidth())
             if (task.active) OutlinedButton(onClick = onStop, enabled = task.phase != AiTaskPhase.Stopping,
                 modifier = Modifier.testTag("stop-ai")) { Text("Stop CAD task") }
             if (task.id != null) {
-                Text(task.instruction, style = MaterialTheme.typography.bodyMedium)
-                task.revisionNumber?.let { Text("Current revision $it", Modifier.testTag("cad-revision")) }
-                task.planVersion?.let { Text("CAD plan version $it", Modifier.testTag("cad-plan-version")) }
-                task.summary?.let { Text(it, Modifier.testTag("cad-plan-summary"), style = MaterialTheme.typography.titleSmall) }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                SelectionContainer { Text(task.instruction, style = MaterialTheme.typography.bodyMedium) }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    task.revisionNumber?.let { StatusPill("Current revision $it", Modifier.testTag("cad-revision"), MaterialTheme.colorScheme.secondary) }
+                    task.planVersion?.let { StatusPill("CAD plan version $it", Modifier.testTag("cad-plan-version"), MaterialTheme.colorScheme.secondary) }
+                }
+                task.summary?.let { SelectionContainer { Text(it, Modifier.testTag("cad-plan-summary"), style = MaterialTheme.typography.titleMedium) } }
                 if (task.assumptions.isNotEmpty()) {
-                    Text("Assumptions", style = MaterialTheme.typography.titleSmall)
-                    task.assumptions.forEach { Text("• $it") }
+                    SectionHeading("Design assumptions")
+                    task.assumptions.forEach { Notice(it) }
                 }
                 if (task.ambiguities.isNotEmpty()) {
-                    Text("Clarification needed", style = MaterialTheme.typography.titleSmall)
-                    task.ambiguities.forEach { Text("• $it") }
+                    SectionHeading("Clarification needed")
+                    task.ambiguities.forEach { Notice(it) }
                 }
                 if (task.proposedCommands.isNotEmpty()) {
-                    Text("Command plan", style = MaterialTheme.typography.titleSmall)
-                    task.proposedCommands.forEachIndexed { index, command -> Text("${index + 1}. $command") }
+                    SectionHeading("Planned operations", "${task.proposedCommands.size} operations · review before approval")
+                    task.proposedCommands.forEachIndexed { index, command ->
+                        Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.surfaceContainerLowest) {
+                            Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Text("${index + 1}".padStart(2, '0'), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
+                                SelectionContainer(Modifier.weight(1f)) { Text(command, style = MaterialTheme.typography.bodyMedium) }
+                            }
+                        }
+                    }
                 }
                 if (task.planVersion == 2 && task.planValidated) {
                     Text("To change this new part, start a new CAD task with a new filename.", style = MaterialTheme.typography.bodySmall)
@@ -86,36 +89,40 @@ fun AiTaskPanel(
                     OutlinedTextField(changes, { changes = it.take(2001) }, label = { Text("Clarification or requested changes") },
                         modifier = Modifier.fillMaxWidth().testTag("revision-instructions"), maxLines = 4)
                     OutlinedButton(onClick = { onRequestChanges(changes) }, enabled = changes.trim().length in 1..2000 && !task.actionPending,
-                        modifier = Modifier.testTag("revise-cad-plan")) { Text("Submit changes for a new plan") }
+                        modifier = Modifier.fillMaxWidth().testTag("revise-cad-plan")) { Text("Submit changes for a new plan") }
                 }
                 if (task.phase == AiTaskPhase.AwaitingApproval) {
-                    Button(onClick = onApprove, enabled = task.canApprove, modifier = Modifier.testTag("approve-cad-plan")) {
+                    Button(onClick = onApprove, enabled = task.canApprove, modifier = Modifier.fillMaxWidth().testTag("approve-cad-plan")) {
                         Text("Approve revision ${task.revisionNumber ?: ""}")
                     }
                 }
-                task.actionError?.let { Text(it, color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.testTag("cad-action-error")) }
+                task.actionError?.let { Notice(it, error = true, modifier = Modifier.testTag("cad-action-error")) }
                 if (task.verifications.isNotEmpty()) {
-                    Text("Native verification", style = MaterialTheme.typography.titleSmall)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    SectionHeading("Native verification", "Evidence reported by the Windows CAD Agent")
                     task.verifications.forEach {
-                        Text("${if (it.passed) "Passed" else "Failed"}: ${it.checkName}")
-                        it.expected?.let { expected -> Text("Expected: $expected", style = MaterialTheme.typography.bodySmall) }
-                        it.actual?.let { actual -> Text("Actual: $actual", style = MaterialTheme.typography.bodySmall) }
+                        Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.surfaceContainerLowest) {
+                            Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("${if (it.passed) "Passed" else "Failed"}: ${it.checkName}", color = if (it.passed) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error)
+                                it.expected?.let { expected -> SelectionContainer { Text("Expected: $expected", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
+                                it.actual?.let { actual -> SelectionContainer { Text("Actual: $actual", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
+                            }
+                        }
                     }
                 }
-                task.outputPath?.let { Text("Saved native file: $it", Modifier.testTag("cad-saved-path")) }
+                task.outputPath?.let { SelectionContainer { Text("Saved native file: $it", Modifier.testTag("cad-saved-path"), style = MaterialTheme.typography.bodySmall) } }
                 if (task.phase in setOf(AiTaskPhase.ReadyForReview, AiTaskPhase.Completed) && task.outputPath != null) {
-                    OutlinedButton(onClick = onDownload, enabled = !state.downloadingArtifact, modifier = Modifier.testTag("download-cad-file")) {
+                    OutlinedButton(onClick = onDownload, enabled = !state.downloadingArtifact, modifier = Modifier.fillMaxWidth().testTag("download-cad-file")) {
                         Text(if (state.downloadingArtifact) "Downloading…" else "Download native file")
                     }
                 }
                 if (task.phase == AiTaskPhase.ReadyForReview) {
                     Text("Review the model in the live desktop preview and the verification evidence above.")
-                    Button(onClick = onComplete, enabled = task.canComplete, modifier = Modifier.testTag("complete-cad-job")) { Text("Accept and complete job") }
+                    Button(onClick = onComplete, enabled = task.canComplete, modifier = Modifier.fillMaxWidth().testTag("complete-cad-job")) { Text("Accept and complete job") }
                 }
                 if (task.actionPending) LinearProgressIndicator(Modifier.fillMaxWidth())
             }
-            Text("The Windows CAD Agent runs approved plans. Stopping a task must be confirmed before remote control resumes.", style = MaterialTheme.typography.bodySmall)
+            Notice("The Windows CAD Agent runs approved plans. Stopping a task must be confirmed before remote control resumes.")
         }
     }
 }

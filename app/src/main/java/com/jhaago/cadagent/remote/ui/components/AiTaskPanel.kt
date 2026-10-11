@@ -19,7 +19,8 @@ fun AiTaskPanel(
     onDownload: () -> Unit = {}, onStop: () -> Unit = {},
 ) {
     val task = state.session.task
-    var changes by rememberSaveable(task.id, task.revisionId) { mutableStateOf("") }
+    var savedDraft by rememberSaveable { mutableStateOf(listOf(task.id.orEmpty(), task.revisionId.orEmpty(), "")) }
+    val changes = restoredRevisionDraft(savedDraft, task.id, task.revisionId)
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         WorkspaceCard {
             SectionHeading("Design request", "Describe the part, dimensions and feature intent.")
@@ -86,7 +87,7 @@ fun AiTaskPanel(
                     Text("To change this new part, start a new CAD task with a new filename.", style = MaterialTheme.typography.bodySmall)
                 }
                 if (task.canRevise) {
-                    OutlinedTextField(changes, { changes = it.take(2001) }, label = { Text("Clarification or requested changes") },
+                    OutlinedTextField(changes, { savedDraft = listOf(task.id.orEmpty(), task.revisionId.orEmpty(), it.take(2001)) }, label = { Text("Clarification or requested changes") },
                         modifier = Modifier.fillMaxWidth().testTag("revision-instructions"), maxLines = 4)
                     OutlinedButton(onClick = { onRequestChanges(changes) }, enabled = changes.trim().length in 1..2000 && !task.actionPending,
                         modifier = Modifier.fillMaxWidth().testTag("revise-cad-plan")) { Text("Submit changes for a new plan") }

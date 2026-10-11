@@ -5,3 +5,4 @@
 .kotlin/
 local.properties
 **/build/
+*.log

@@ -94,7 +94,7 @@ class LiveRemoteFlowTest {
             compose.waitUntil(5000) { driver.status.value.controller == RemoteController.User }
             server.holdFrames = true
             compose.waitUntil(6000) { driver.frame.value == null && driver.status.value.controller == RemoteController.None }
-            compose.onNodeWithTag("take-control").assertIsNotEnabled()
+            compose.onNodeWithTag("take-control").assertDoesNotExist()
             compose.onNodeWithTag("remote-content").performScrollToNode(hasTestTag("disconnect-remote"))
             compose.onNodeWithTag("disconnect-remote").performClick()
             compose.waitUntil(5000) { driver.status.value.connection == RemoteConnectionState.Disconnected }

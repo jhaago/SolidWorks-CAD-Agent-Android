@@ -3,7 +3,8 @@ package com.jhaago.cadagent.ui
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
@@ -14,6 +15,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.test.platform.app.InstrumentationRegistry
 import com.jhaago.cadagent.di.AppContainer
@@ -88,18 +91,34 @@ class ModernWorkspaceTest {
         compose.runOnIdle { assertEquals(1, approvals) }
     }
 
-    @Test fun revisionDraftSurvivesReviewItemLeavingComposition() {
+    @Test fun revisionDraftRestoresOnlyForTheSameReviewRevision() {
+        val visible = mutableStateOf(true)
+        val currentReview = mutableStateOf(review)
         compose.setContent { CadAgentTheme {
-            LazyColumn(Modifier.fillMaxSize().testTag("review-list")) {
-                items(20) { Spacer(Modifier.height(300.dp)) }
-                item(key = "review") { AiTaskPanel(review, {}, {}) }
+            val holder = rememberSaveableStateHolder()
+            if (visible.value) {
+                holder.SaveableStateProvider("review") {
+                    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                        AiTaskPanel(currentReview.value, {}, {})
+                    }
+                }
             }
         } }
-        compose.onNodeWithTag("review-list").performScrollToIndex(20)
+        compose.onNodeWithTag("revision-instructions").performScrollTo()
         compose.onNodeWithTag("revision-instructions").performTextInput("Increase the plate thickness to 12 mm")
-        compose.onNodeWithTag("review-list").performScrollToIndex(0)
+        compose.runOnIdle { visible.value = false }
         compose.onNodeWithTag("revision-instructions").assertDoesNotExist()
-        compose.onNodeWithTag("review-list").performScrollToIndex(20)
+        compose.runOnIdle { visible.value = true }
         compose.onNodeWithTag("revision-instructions").assertTextContains("Increase the plate thickness to 12 mm")
+        compose.runOnIdle { visible.value = false }
+        compose.onNodeWithTag("revision-instructions").assertDoesNotExist()
+        compose.runOnIdle {
+            currentReview.value = review.copy(session = review.session.copy(
+                task = review.session.task.copy(revisionId = "next-revision", revisionNumber = 2)))
+            visible.value = true
+        }
+        compose.onNodeWithTag("revision-instructions").assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
+        compose.onNodeWithTag("revise-cad-plan").assertIsNotEnabled()
     }
 }

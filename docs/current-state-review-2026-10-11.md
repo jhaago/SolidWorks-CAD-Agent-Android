@@ -18,6 +18,15 @@ Evidence is in `app/build/test-results/testDebugUnitTest`,
 Builds used the existing offline JDK 17, Gradle 9.6.0 and Android SDK 36 caches.
 No dependencies were changed. Independent review confirmed the owner-check fix.
 
+GitHub's API 35 emulator initially passed 16 of 18 UI tests. The two failures
+identified stale test assumptions: the remote screen hides control when its live
+frame disappears, and Compose retains a focused lazy item even offscreen. The
+remote test now checks absence of control; the draft test explicitly disposes and
+restores its saveable panel, verifies the same revision retains text, and verifies
+a changed revision restores an empty field with revision submission disabled.
+The updated instrumentation APK compiles (`android-emulator-test-update.log`).
+The current GitHub workflow is the source of emulator execution results.
+
 No physical Android device was connected and no local emulator executable was
 available. Instrumentation APK compilation is not device acceptance. Live pairing,
 cloud planning, photos, approval/execution/cancel/complete/download, network

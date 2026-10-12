@@ -13,6 +13,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 
 /** Owns one paired origin. Input is never replayed; network jobs share an owning coroutine scope. */
@@ -48,6 +50,12 @@ class LiveConnectionDriver(
     private var mutationInFlight = false
     private var submissionInFlight = false
     private var stopRequestedGeneration: Long? = null
+    private val submissionScope = SubmissionScope(workstation.endpoint.origin, workstation.deviceId)
+    private val trackingWrites = Mutex()
+    private var trackingLoaded = submissionStore == null
+    private var trackingError: String? = null
+    private var trackedSubmission: SubmissionRecovery? = null
+    private var submissionConfirmed = false
     private val queue = ArrayDeque<QueuedInput>()
     private val signal = Channel<Unit>(Channel.CONFLATED)
     private data class Session(val id: String, val epoch: Long, val controlling: Boolean)
@@ -56,6 +64,7 @@ class LiveConnectionDriver(
     private data class AgentRuntime(
         val available: Boolean,
         val supportsJobImages: Boolean,
+        val supportsClientSubmissionIds: Boolean,
         val executionMode: String?,
         val model: String?,
         val solidWorksRunning: Boolean,
@@ -89,7 +98,8 @@ class LiveConnectionDriver(
             while (current(id)) {
                 synchronized(gate) { publish(RemoteConnectionState.Connecting, message = if (retry == 0) "Connecting securely…" else "Reconnecting…") }
                 try {
-                    val opened = readGrant(transport.call(workstation.endpoint, RemoteOperation("session/create", "POST", "Device", workstation.credential, mapOf("deviceId" to workstation.deviceId))).body)
+                    restoreSubmission(id)
+                    val opened = openDeviceSession(id)
                     synchronized(gate) {
                         if (!current(id)) return@launch
                         grant = opened
@@ -130,6 +140,27 @@ class LiveConnectionDriver(
     }
 
     private fun current(id: Long) = synchronized(gate) { id == attempt && wanted && foreground }
+
+    private suspend fun openDeviceSession(id: Long): Grant {
+        try {
+            return readGrant(transport.call(workstation.endpoint, RemoteOperation("session/create", "POST", "Device", workstation.credential, mapOf("deviceId" to workstation.deviceId))).body)
+        } catch (error: RemoteFailure) {
+            if (error.status in setOf(401, 403) && synchronized(gate) { current(id) }) {
+                try { trackingWrites.withLock { submissionStore?.clearScope(submissionScope) } }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { trackingFailed() }
+                synchronized(gate) {
+                    if (current(id)) {
+                        if (trackingError == null) { trackedSubmission = null; submissionConfirmed = false; stopRequestedGeneration = null }
+                        wanted = false
+                        mutableStatus.value = mutableStatus.value.copy(task = mutableStatus.value.task.copy(phase = AiTaskPhase.Stopped))
+                        publish(RemoteConnectionState.Disconnected, trackingError ?: "Device pairing was rejected. Pair with the workstation again.")
+                    }
+                }
+            }
+            throw error
+        }
+    }
 
     // Response ownership survives token renewal, but never a different connection or session.
     // Call under gate so session selection and the resulting state change stay atomic.
@@ -183,7 +214,7 @@ class LiveConnectionDriver(
         val captured = grant
         if (trimmed.isBlank() || trimmed.length > 2000 || captured == null || !foreground ||
             state.connection != RemoteConnectionState.Connected || state.mode == RemoteControlMode.Manual || state.task.active ||
-            (photo != null && !state.supportsJobImages)) return@synchronized null
+            (photo != null && !state.supportsJobImages) || !trackingLoaded || trackingError != null || trackedSubmission != null) return@synchronized null
 
         val generation = ++aiGeneration
         submissionInFlight = true
@@ -195,6 +226,14 @@ class LiveConnectionDriver(
             message = "CAD task submitted to the workstation.",
         )
         val id = attempt
+        if (state.supportsClientSubmissionIds) {
+            val recovery = SubmissionRecovery(PendingSubmission(requestId.removePrefix("pending:"), false), trimmed,
+                photo?.let { CadPhoto(it.jpegBytes.copyOf()) })
+            trackedSubmission = recovery
+            submissionConfirmed = false
+            work.launch { submitIdentified(id, captured, generation, recovery) }
+            return@synchronized requestId
+        }
         work.launch {
             try {
                 val payload = if (photo == null) mapOf("prompt" to trimmed) else mapOf(
@@ -233,6 +272,128 @@ class LiveConnectionDriver(
             }
         }
         requestId
+    }
+
+    private suspend fun restoreSubmission(id: Long) {
+        if (synchronized(gate) { trackingLoaded }) return
+        try {
+            val pending = trackingWrites.withLock { submissionStore?.read(submissionScope) }
+            synchronized(gate) {
+                if (!current(id)) return
+                trackingLoaded = true
+                if (pending != null) {
+                    trackedSubmission = SubmissionRecovery(pending)
+                    submissionConfirmed = false
+                    val generation = ++aiGeneration
+                    stopRequestedGeneration = if (pending.cancelRequested) generation else null
+                    mutableStatus.value = mutableStatus.value.copy(task = AiTaskState(pending.id,
+                        phase = if (pending.cancelRequested) AiTaskPhase.Stopping else AiTaskPhase.Running,
+                        message = "Recovering the submitted CAD task…"))
+                }
+            }
+        } catch (error: CancellationException) { throw error }
+        catch (_: Exception) { trackingFailed() }
+    }
+
+    private fun trackingFailed() = synchronized(gate) {
+        trackingError = SubmissionStorageException().message
+        mutableStatus.value = mutableStatus.value.copy(message = trackingError,
+            task = mutableStatus.value.task.copy(message = trackingError!!))
+    }
+
+    private suspend fun persistSubmission(generation: Long, recovery: SubmissionRecovery): Boolean = trackingWrites.withLock {
+        val pending = synchronized(gate) {
+            if (generation != aiGeneration || trackedSubmission !== recovery) return@withLock false
+            recovery.pending
+        }
+        submissionStore!!.write(submissionScope, pending)
+        synchronized(gate) { generation == aiGeneration && trackedSubmission === recovery }
+    }
+
+    private suspend fun clearSubmission(generation: Long, recovery: SubmissionRecovery) {
+        try {
+            trackingWrites.withLock {
+                if (!synchronized(gate) { generation == aiGeneration && trackedSubmission === recovery }) return
+                submissionStore!!.clear(submissionScope, recovery.pending.id)
+                synchronized(gate) {
+                    if (generation == aiGeneration && trackedSubmission === recovery) {
+                        trackedSubmission = null; submissionConfirmed = false; trackingError = null
+                    }
+                }
+            }
+        } catch (error: CancellationException) { throw error }
+        catch (_: Exception) { trackingFailed() }
+    }
+
+    private suspend fun submitIdentified(id: Long, captured: Grant, generation: Long, recovery: SubmissionRecovery) {
+        try {
+            if (!persistSubmission(generation, recovery)) return
+            val allowed = synchronized(gate) { ownsSession(id, captured) && generation == aiGeneration &&
+                trackedSubmission === recovery && !recovery.pending.cancelRequested && trackingError == null }
+            if (!allowed) {
+                if (recovery.pending.cancelRequested) persistSubmission(generation, recovery)
+                return
+            }
+            val payload = mutableMapOf<String, Any?>("prompt" to recovery.instruction!!, "clientSubmissionId" to recovery.pending.id)
+            recovery.photo?.let { payload["image"] = mapOf("mediaType" to "image/jpeg", "dataBase64" to Base64.getEncoder().encodeToString(it.jpegBytes)) }
+            val latest = synchronized(gate) { grant } ?: return
+            val job = readJob(transport.call(workstation.endpoint, RemoteOperation("agent/jobs", "POST", "Session", latest.token, payload)).body)
+            if (job.id != recovery.pending.id) throw RemoteFailure(0, "receipt_mismatch", "Submission receipt did not match. Checking the exact job…")
+            val cancel = synchronized(gate) {
+                if (!ownsSession(id, captured) || generation != aiGeneration || trackedSubmission !== recovery) return
+                submissionConfirmed = true
+                applyJob(if (recovery.pending.cancelRequested && job.active) job.copy(phase = AiTaskPhase.Stopping) else job, generation)
+                recovery.pending.cancelRequested && job.active
+            }
+            if (cancel && persistSubmission(generation, recovery)) cancelKnownJob(id, captured, generation, recovery.pending.id)
+        } catch (error: CancellationException) { throw error }
+        catch (error: Exception) {
+            if (!synchronized(gate) { ownsSession(id, captured) && generation == aiGeneration && trackedSubmission === recovery }) return
+            if (error is SubmissionStorageException) trackingFailed()
+            else {
+                // 409 can describe an existing conflicting identity; it is never evidence of rejection.
+                val rejected = error is RemoteFailure && error.status in setOf(400, 401, 403, 405, 413, 415, 422, 429)
+                if (rejected) clearSubmission(generation, recovery)
+                synchronized(gate) {
+                    if (!ownsSession(id, captured) || generation != aiGeneration) return
+                    val cleared = rejected && trackedSubmission == null
+                    mutableStatus.value = mutableStatus.value.copy(controller = RemoteController.None,
+                        task = mutableStatus.value.task.copy(id = if (cleared) null else mutableStatus.value.task.id,
+                            phase = if (cleared) AiTaskPhase.Stopped else if (recovery.pending.cancelRequested) AiTaskPhase.Stopping else AiTaskPhase.Running,
+                            message = if (cleared) safeAgentMessage(error) else "Submission result is uncertain. Checking the exact job…"),
+                        message = trackingError ?: safeAgentMessage(error))
+                    if (cleared) stopRequestedGeneration = null
+                }
+            }
+        } finally {
+            synchronized(gate) { if (generation == aiGeneration) submissionInFlight = false }
+        }
+    }
+
+    private suspend fun recoverSubmission(id: Long, captured: Grant, generation: Long, recovery: SubmissionRecovery) {
+        try {
+            val job = readJob(transport.call(workstation.endpoint, RemoteOperation("agent/jobs/${recovery.pending.id}", "GET", "Session", captured.token)).body)
+            if (job.id != recovery.pending.id) throw RemoteFailure(0, "receipt_mismatch", "Submission receipt did not match. Waiting for the exact job.")
+            val cancel = synchronized(gate) {
+                if (!ownsSession(id, captured) || generation != aiGeneration || trackedSubmission !== recovery) return
+                submissionConfirmed = true
+                applyJob(if (recovery.pending.cancelRequested && job.active) job.copy(phase = AiTaskPhase.Stopping) else job, generation)
+                recovery.pending.cancelRequested && job.active
+            }
+            if (cancel && persistSubmission(generation, recovery)) cancelKnownJob(id, captured, generation, recovery.pending.id)
+        } catch (error: CancellationException) { throw error }
+        catch (error: Exception) {
+            if (error is SubmissionStorageException) { trackingFailed(); return }
+            val retry = synchronized(gate) {
+                if (!ownsSession(id, captured) || generation != aiGeneration || trackedSubmission !== recovery) return
+                mutableStatus.value = mutableStatus.value.copy(message = "Submission is unconfirmed. Waiting for the exact job.")
+                if (error is RemoteFailure && error.status == 404 && trackingError == null && !submissionInFlight &&
+                    recovery.canRetry(foreground && grant != null)) {
+                    recovery.retryCount++; submissionInFlight = true; true
+                } else false
+            }
+            if (retry) submitIdentified(id, captured, generation, recovery)
+        }
     }
 
     fun approvePlan(): Boolean = mutateJob("approve", { it.canApprove }) { mapOf("revisionId" to it.revisionId) }
@@ -303,6 +464,28 @@ class LiveConnectionDriver(
     }
 
     fun stopAiTask() {
+        val tracked = synchronized(gate) {
+            trackedSubmission?.let { recovery ->
+                recovery.pending = recovery.pending.copy(cancelRequested = true)
+                stopRequestedGeneration = aiGeneration
+                mutableStatus.value = mutableStatus.value.copy(controller = RemoteController.None,
+                    task = mutableStatus.value.task.copy(phase = AiTaskPhase.Stopping, message = "Stopping CAD task…"))
+                Triple(aiGeneration, recovery, Pair(attempt, grant))
+            }
+        }
+        if (tracked != null) {
+            work.launch {
+                try {
+                    if (persistSubmission(tracked.first, tracked.second)) {
+                        val captured = tracked.third.second
+                        if (captured != null && synchronized(gate) { submissionConfirmed && !submissionInFlight })
+                            cancelKnownJob(tracked.third.first, captured, tracked.first, tracked.second.pending.id)
+                    }
+                } catch (error: CancellationException) { throw error }
+                catch (_: Exception) { trackingFailed() }
+            }
+            return
+        }
         val dispatch = synchronized(gate) {
             val state = mutableStatus.value
             val captured = grant
@@ -337,6 +520,7 @@ class LiveConnectionDriver(
         }
         try {
             val cancelled = readJob(transport.call(workstation.endpoint, RemoteOperation("agent/jobs/$jobId/cancel", "POST", "Session", latest.token)).body)
+            if (cancelled.id != jobId) throw RemoteFailure(0, "receipt_mismatch", "Cancellation receipt did not match the job.")
             synchronized(gate) {
                 if (!ownsSession(id, captured) || generation != aiGeneration || mutableStatus.value.task.id != jobId) return@synchronized
                 mutableStatus.value = mutableStatus.value.copy(
@@ -345,6 +529,7 @@ class LiveConnectionDriver(
                     message = if (!cancelled.active) "CAD task cancellation confirmed." else "Waiting for the workstation to confirm cancellation…",
                 )
                 if (!cancelled.active) stopRequestedGeneration = null
+                if (!cancelled.active) trackedSubmission?.let { recovery -> work.launch { clearSubmission(generation, recovery) } }
             }
         } catch (error: CancellationException) { throw error }
         catch (error: Exception) {
@@ -494,8 +679,9 @@ class LiveConnectionDriver(
             if (!current(id) || grant?.token != captured.token) return@synchronized
             val currentTask = mutableStatus.value.task
             val remoteTask = runtime.activeJob
-            val recoveringSubmission = currentTask.id?.startsWith("pending:") == true && !submissionInFlight && remoteTask?.instruction == currentTask.instruction
-            val pendingLocal = (currentTask.id?.startsWith("pending:") == true || currentTask.phase == AiTaskPhase.Stopping || mutationInFlight) && !recoveringSubmission
+            val recoveringSubmission = trackedSubmission == null && trackingError == null && currentTask.id?.startsWith("pending:") == true && !submissionInFlight && remoteTask?.instruction == currentTask.instruction
+            val pendingLocal = trackedSubmission != null || trackingError != null ||
+                ((currentTask.id?.startsWith("pending:") == true || currentTask.phase == AiTaskPhase.Stopping || mutationInFlight) && !recoveringSubmission)
             val nextMode = if (!pendingLocal && remoteTask?.active == true && mutableStatus.value.mode == RemoteControlMode.Manual) RemoteControlMode.Agent else mutableStatus.value.mode
             val nextTask = if (recoveringSubmission && stopRequestedGeneration != null && remoteTask != null) remoteTask.copy(phase = AiTaskPhase.Stopping)
                 else if (!pendingLocal && remoteTask != null && remoteTask.id == currentTask.id &&
@@ -507,6 +693,7 @@ class LiveConnectionDriver(
             mutableStatus.value = mutableStatus.value.copy(
                 agentHostAvailable = runtime.available,
                 supportsJobImages = runtime.supportsJobImages,
+                supportsClientSubmissionIds = runtime.supportsClientSubmissionIds && submissionStore != null,
                 executionMode = runtime.executionMode,
                 aiModel = runtime.model,
                 solidWorksRunning = runtime.solidWorksRunning,
@@ -526,6 +713,9 @@ class LiveConnectionDriver(
     }
 
     private suspend fun refreshActiveJob(id: Long, captured: Grant) {
+        val recovery = synchronized(gate) { trackedSubmission?.takeUnless { submissionInFlight || trackingError != null }?.let { Pair(aiGeneration, it) } }
+        if (recovery != null) { recoverSubmission(id, captured, recovery.first, recovery.second); return }
+        if (synchronized(gate) { trackedSubmission != null || trackingError != null }) return
         val snapshot = synchronized(gate) { mutableStatus.value.task }
         val jobId = snapshot.id?.takeUnless { it.startsWith("pending:") } ?: return
         if (!snapshot.active) return
@@ -544,6 +734,8 @@ class LiveConnectionDriver(
 
     private fun applyJob(job: AiTaskState, generation: Long) {
         if (generation != aiGeneration) return
+        val recovery = trackedSubmission
+        if (recovery != null && job.id != recovery.pending.id) return
         val mode = mutableStatus.value.mode
         mutableStatus.value = mutableStatus.value.copy(
             controller = if (job.active && mode == RemoteControlMode.Agent) RemoteController.Ai else RemoteController.None,
@@ -551,6 +743,7 @@ class LiveConnectionDriver(
             message = job.message,
         )
         if (!job.active) stopRequestedGeneration = null
+        if (!job.active && recovery != null) work.launch { clearSubmission(generation, recovery) }
     }
 
     private suspend fun frameLoop(id: Long) {
@@ -644,6 +837,7 @@ class LiveConnectionDriver(
             mode = RemoteControlMode.Manual,
             controlPending = false,
             supportsJobImages = false,
+            supportsClientSubmissionIds = false,
             message = message,
         )
     }
@@ -667,6 +861,7 @@ class LiveConnectionDriver(
         AgentRuntime(
             available = json.getBoolean("agentHostAvailable"),
             supportsJobImages = json.optBoolean("jobInputImages", false),
+            supportsClientSubmissionIds = json.optBoolean("clientSubmissionIds", false),
             executionMode = json.optionalString("executionMode", 64),
             model = json.optionalString("model", 128),
             solidWorksRunning = solidWorks.getBoolean("running"),

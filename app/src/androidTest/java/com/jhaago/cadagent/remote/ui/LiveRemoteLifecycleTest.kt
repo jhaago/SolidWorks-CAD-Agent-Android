@@ -74,4 +74,56 @@ class LiveRemoteLifecycleTest {
             assertNull(driver.frame.value)
         } finally { driver.close(); scope.cancel() }
     }
+
+    @Test fun recreatedDriverRecoversPersistedCancellationForExactJob() {
+        val id = "11111111-1111-4111-8111-111111111111"
+        val foreign = "22222222-2222-4222-8222-222222222222"
+        val paired = PairedWorkstation(RemoteEndpoint.parse("https://pc.example"), "device", "credential")
+        val storageScope = SubmissionScope(paired.endpoint.origin, paired.deviceId)
+        val preferences = compose.activity.getSharedPreferences("submission-test-${java.util.UUID.randomUUID()}", 0)
+        val store = SharedPreferencesPendingSubmissionStore(preferences)
+        runBlocking { store.write(storageScope, PendingSubmission(id, true)) }
+        val server = Server()
+        val exactRead = CompletableDeferred<Unit>()
+        val calls = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val network = object : RemoteTransport {
+            override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
+                calls += operation.route
+                return when (operation.route) {
+                    "agent/status" -> RemoteResponse(200, """{"agentHostAvailable":true,"clientSubmissionIds":true,"solidWorks":{"running":true,"attached":true,"visible":true},"activeJob":{"id":"$foreign","prompt":"Build plate","state":"AwaitingApproval"}}""")
+                    "agent/jobs/$id" -> { exactRead.await(); RemoteResponse(200, """{"id":"$id","prompt":"Build plate","state":"AwaitingApproval"}""") }
+                    "agent/jobs/$id/cancel" -> RemoteResponse(200, """{"id":"$id","prompt":"Build plate","state":"Cancelled"}""")
+                    "agent/jobs" -> error("A recreated submission must never resend its missing input")
+                    else -> server.call(endpoint, operation)
+                }
+            }
+        }
+        val firstScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val secondScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val first = LiveConnectionDriver(firstScope, network, paired, submissionStore = store)
+        val second = LiveConnectionDriver(secondScope, network, paired,
+            submissionStore = SharedPreferencesPendingSubmissionStore(preferences))
+        try {
+            compose.runOnIdle {
+                ViewModelProvider(compose.activity)[CadAgentAppViewModel::class.java].container.selectLive(first)
+                first.setForeground(true); first.connect()
+            }
+            compose.waitUntil(5000) { calls.contains("agent/jobs/$id") }
+            compose.activityRule.scenario.recreate()
+            compose.runOnIdle {
+                first.close()
+                assertTrue(ViewModelProvider(compose.activity)[CadAgentAppViewModel::class.java].container.selectLive(second))
+                second.setForeground(true); second.connect()
+            }
+            exactRead.complete(Unit)
+            compose.waitUntil(5000) { second.status.value.task.phase == AiTaskPhase.Stopped }
+            assertEquals(id, second.status.value.task.id)
+            assertTrue(calls.contains("agent/jobs/$id/cancel"))
+            assertFalse(calls.contains("agent/jobs") || calls.contains("agent/jobs/$foreign/cancel"))
+            compose.waitUntil(5000) { runBlocking { store.read(storageScope) == null } }
+        } finally {
+            first.close(); second.close(); firstScope.cancel(); secondScope.cancel()
+            preferences.edit().clear().commit()
+        }
+    }
 }

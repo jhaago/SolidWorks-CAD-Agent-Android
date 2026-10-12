@@ -88,8 +88,12 @@ class SubmissionLifecycleTest {
         val server = SubmissionServer(); val driver = driver(server, store)
         driver.submitAiTask("Build plate"); runCurrent(); driver.stopAiTask(); runCurrent()
         store.writeGate!!.complete(Unit); runCurrent()
-        assertTrue(store.record!!.cancelRequested)
-        assertFalse(server.calls.any { it.route == "agent/jobs" }); driver.close()
+        assertNull(store.record)
+        assertEquals(AiTaskPhase.Stopped, driver.status.value.task.phase)
+        assertFalse(server.calls.any { it.route == "agent/jobs" })
+        advanceTimeBy(1100); runCurrent()
+        assertNotNull(driver.submitAiTask("Build plate")); runCurrent()
+        assertEquals(1, server.calls.count { it.route == "agent/jobs" }); driver.close()
     }
 
     @Test fun reconnectAndRenewalRetainSubmissionAndTerminalConfirmationAllowsNewId() = runTest {
@@ -126,11 +130,43 @@ class SubmissionLifecycleTest {
         assertNull(legacyStore.record); old.close()
     }
 
+    @Test fun rejectedRetryKeepsOriginalUncertaintyUntilItsExactReceiptAppears() = runTest {
+        val store = MemorySubmissions(); val server = SubmissionServer().also { it.loseReceipt = true; it.missing = true; it.rejectRetry = true }
+        val driver = driver(server, store)
+        driver.submitAiTask("Build plate"); runCurrent(); val id = store.record!!.id
+        advanceTimeBy(1100); runCurrent()
+        assertEquals(id, store.record?.id); assertTrue(driver.status.value.task.active)
+        assertNull(driver.submitAiTask("New task"))
+        server.missing = false; advanceTimeBy(1100); runCurrent()
+        assertEquals(id, driver.status.value.task.id); assertEquals(AiTaskPhase.AwaitingApproval, driver.status.value.task.phase)
+        driver.close()
+    }
+
+    @Test fun transientTrackingReadFailureRecoversOnReconnectForExistingAndEmptyRecords() = runTest {
+        for (pending in listOf(null, PendingSubmission(fixedId, false))) {
+            val store = MemorySubmissions().also { it.record = pending; it.failRead = true }
+            val server = SubmissionServer().also { it.jobId = fixedId }
+            val driver = driver(server, store)
+            assertNull(driver.submitAiTask("Blocked task"))
+            store.failRead = false; driver.disconnect(); driver.connect(); runCurrent()
+            advanceTimeBy(1100); runCurrent()
+            if (pending != null) {
+                assertTrue(server.calls.any { it.route == "agent/jobs/$fixedId" })
+                assertEquals(AiTaskPhase.AwaitingApproval, driver.status.value.task.phase)
+            } else {
+                driver.setMode(RemoteControlMode.Agent)
+                assertNotNull(driver.submitAiTask("Build plate")); runCurrent()
+            }
+            driver.close()
+        }
+    }
+
     private class MemorySubmissions : PendingSubmissionStore {
         var record: PendingSubmission? = null
         var failWrite = false
+        var failRead = false
         var writeGate: CompletableDeferred<Unit>? = null
-        override suspend fun read(scope: SubmissionScope) = record
+        override suspend fun read(scope: SubmissionScope): PendingSubmission? { if (failRead) throw SubmissionStorageException(); return record }
         override suspend fun write(scope: SubmissionScope, submission: PendingSubmission) {
             writeGate?.await(); if (failWrite) throw SubmissionStorageException()
             record = submission.copy(cancelRequested = submission.cancelRequested || record?.cancelRequested == true)
@@ -144,6 +180,7 @@ class SubmissionLifecycleTest {
         var state = "AwaitingApproval"
         var loseReceipt = false; var missing = false; var wrongReceipt = false; var conflict = false; var foreignActive = false
         var revoked = false; var supported = true
+        var rejectRetry = false
         var beforePost: (String) -> Unit = {}
         fun job(id: String) = """{"id":"$id","prompt":"Build plate","state":"$state"}"""
         override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
@@ -154,6 +191,7 @@ class SubmissionLifecycleTest {
                 operation.route == "session/heartbeat" -> """{"sessionId":"session","authorityEpoch":1,"controlling":false,"expiresAt":"2026-10-06T00:05:00Z"}"""
                 operation.route == "agent/status" -> """{"agentHostAvailable":true,"jobInputImages":true,"clientSubmissionIds":$supported,"solidWorks":{"running":true,"attached":true,"visible":true},"activeJob":${if (foreignActive) job(foreignId) else "null"}}"""
                 operation.route == "agent/jobs" -> {
+                    if (rejectRetry && calls.count { it.route == "agent/jobs" } > 1) throw RemoteFailure(429, "busy", "Retry rejected")
                     val id = operation.payload["clientSubmissionId"] as? String ?: "33333333-3333-4333-8333-333333333333"
                     beforePost(id); jobId = id
                     if (conflict) throw RemoteFailure(409, "SUBMISSION_CONFLICT", "Different input")

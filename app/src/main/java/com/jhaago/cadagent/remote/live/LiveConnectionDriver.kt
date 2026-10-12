@@ -148,7 +148,7 @@ class LiveConnectionDriver(
             if (error.status in setOf(401, 403) && synchronized(gate) { current(id) }) {
                 try { trackingWrites.withLock { submissionStore?.clearScope(submissionScope) } }
                 catch (cancelled: CancellationException) { throw cancelled }
-                catch (_: Exception) { trackingFailed() }
+                catch (_: Exception) { trackingFailed(attemptId = id) }
                 synchronized(gate) {
                     if (current(id)) {
                         if (trackingError == null) { trackedSubmission = null; submissionConfirmed = false; stopRequestedGeneration = null }
@@ -275,12 +275,13 @@ class LiveConnectionDriver(
     }
 
     private suspend fun restoreSubmission(id: Long) {
-        if (synchronized(gate) { trackingLoaded }) return
+        if (synchronized(gate) { trackingLoaded && trackingError == null }) return
         try {
             val pending = trackingWrites.withLock { submissionStore?.read(submissionScope) }
             synchronized(gate) {
                 if (!current(id)) return
                 trackingLoaded = true
+                trackingError = null
                 if (pending != null) {
                     trackedSubmission = SubmissionRecovery(pending)
                     submissionConfirmed = false
@@ -292,10 +293,12 @@ class LiveConnectionDriver(
                 }
             }
         } catch (error: CancellationException) { throw error }
-        catch (_: Exception) { trackingFailed() }
+        catch (_: Exception) { trackingFailed(attemptId = id) }
     }
 
-    private fun trackingFailed() = synchronized(gate) {
+    private fun trackingFailed(attemptId: Long? = null, generation: Long? = null, recovery: SubmissionRecovery? = null) = synchronized(gate) {
+        if ((attemptId != null && attemptId != attempt) || (generation != null && generation != aiGeneration) ||
+            (recovery != null && trackedSubmission !== recovery)) return@synchronized
         trackingError = SubmissionStorageException().message
         mutableStatus.value = mutableStatus.value.copy(message = trackingError,
             task = mutableStatus.value.task.copy(message = trackingError!!))
@@ -322,7 +325,21 @@ class LiveConnectionDriver(
                 }
             }
         } catch (error: CancellationException) { throw error }
-        catch (_: Exception) { trackingFailed() }
+        catch (_: Exception) { trackingFailed(generation = generation, recovery = recovery) }
+    }
+
+    private suspend fun finishNeverSentCancellation(id: Long, captured: Grant, generation: Long, recovery: SubmissionRecovery) {
+        if (!synchronized(gate) { ownsSession(id, captured) && generation == aiGeneration && trackedSubmission === recovery &&
+                recovery.pending.cancelRequested && recovery.dispatchedAttempts == 0 }) return
+        clearSubmission(generation, recovery)
+        synchronized(gate) {
+            if (ownsSession(id, captured) && generation == aiGeneration && trackedSubmission == null) {
+                stopRequestedGeneration = null
+                mutableStatus.value = mutableStatus.value.copy(controller = RemoteController.None,
+                    task = mutableStatus.value.task.copy(phase = AiTaskPhase.Stopped, message = "CAD task stopped before submission."),
+                    message = "CAD task stopped before submission.")
+            }
+        }
     }
 
     private suspend fun submitIdentified(id: Long, captured: Grant, generation: Long, recovery: SubmissionRecovery) {
@@ -331,12 +348,16 @@ class LiveConnectionDriver(
             val allowed = synchronized(gate) { ownsSession(id, captured) && generation == aiGeneration &&
                 trackedSubmission === recovery && !recovery.pending.cancelRequested && trackingError == null }
             if (!allowed) {
-                if (recovery.pending.cancelRequested) persistSubmission(generation, recovery)
+                if (recovery.pending.cancelRequested) finishNeverSentCancellation(id, captured, generation, recovery)
                 return
             }
             val payload = mutableMapOf<String, Any?>("prompt" to recovery.instruction!!, "clientSubmissionId" to recovery.pending.id)
             recovery.photo?.let { payload["image"] = mapOf("mediaType" to "image/jpeg", "dataBase64" to Base64.getEncoder().encodeToString(it.jpegBytes)) }
-            val latest = synchronized(gate) { grant } ?: return
+            val latest = synchronized(gate) {
+                if (!ownsSession(id, captured) || generation != aiGeneration || trackedSubmission !== recovery || recovery.pending.cancelRequested) null
+                else { recovery.dispatchedAttempts++; grant }
+            }
+            if (latest == null) { finishNeverSentCancellation(id, captured, generation, recovery); return }
             val job = readJob(transport.call(workstation.endpoint, RemoteOperation("agent/jobs", "POST", "Session", latest.token, payload)).body)
             if (job.id != recovery.pending.id) throw RemoteFailure(0, "receipt_mismatch", "Submission receipt did not match. Checking the exact job…")
             val cancel = synchronized(gate) {
@@ -349,10 +370,10 @@ class LiveConnectionDriver(
         } catch (error: CancellationException) { throw error }
         catch (error: Exception) {
             if (!synchronized(gate) { ownsSession(id, captured) && generation == aiGeneration && trackedSubmission === recovery }) return
-            if (error is SubmissionStorageException) trackingFailed()
+            if (error is SubmissionStorageException) trackingFailed(generation = generation, recovery = recovery)
             else {
                 // 409 can describe an existing conflicting identity; it is never evidence of rejection.
-                val rejected = error is RemoteFailure && error.status in setOf(400, 401, 403, 405, 413, 415, 422, 429)
+                val rejected = recovery.dispatchedAttempts <= 1 && error is RemoteFailure && error.status in setOf(400, 401, 403, 405, 413, 415, 422, 429)
                 if (rejected) clearSubmission(generation, recovery)
                 synchronized(gate) {
                     if (!ownsSession(id, captured) || generation != aiGeneration) return
@@ -383,7 +404,7 @@ class LiveConnectionDriver(
             if (cancel && persistSubmission(generation, recovery)) cancelKnownJob(id, captured, generation, recovery.pending.id)
         } catch (error: CancellationException) { throw error }
         catch (error: Exception) {
-            if (error is SubmissionStorageException) { trackingFailed(); return }
+            if (error is SubmissionStorageException) { trackingFailed(generation = generation, recovery = recovery); return }
             val retry = synchronized(gate) {
                 if (!ownsSession(id, captured) || generation != aiGeneration || trackedSubmission !== recovery) return
                 mutableStatus.value = mutableStatus.value.copy(message = "Submission is unconfirmed. Waiting for the exact job.")
@@ -478,11 +499,15 @@ class LiveConnectionDriver(
                 try {
                     if (persistSubmission(tracked.first, tracked.second)) {
                         val captured = tracked.third.second
-                        if (captured != null && synchronized(gate) { submissionConfirmed && !submissionInFlight })
-                            cancelKnownJob(tracked.third.first, captured, tracked.first, tracked.second.pending.id)
+                        if (captured != null && synchronized(gate) { !submissionInFlight }) {
+                            if (tracked.second.dispatchedAttempts == 0 && tracked.second.instruction != null)
+                                finishNeverSentCancellation(tracked.third.first, captured, tracked.first, tracked.second)
+                            else if (synchronized(gate) { submissionConfirmed })
+                                cancelKnownJob(tracked.third.first, captured, tracked.first, tracked.second.pending.id)
+                        }
                     }
                 } catch (error: CancellationException) { throw error }
-                catch (_: Exception) { trackingFailed() }
+                catch (_: Exception) { trackingFailed(generation = tracked.first, recovery = tracked.second) }
             }
             return
         }

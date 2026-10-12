@@ -7,6 +7,7 @@ internal class SubmissionRecovery(
     val instruction: String? = null,
     val photo: CadPhoto? = null,
     var retryCount: Int = 0,
+    var dispatchedAttempts: Int = 0,
 ) {
     fun canRetry(authorizedForeground: Boolean): Boolean = authorizedForeground && instruction != null &&
         !pending.cancelRequested && retryCount < 1

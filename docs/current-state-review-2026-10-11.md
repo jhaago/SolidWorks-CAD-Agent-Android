@@ -17,7 +17,9 @@ from a transient tracking-store error. Older workstations retain the legacy flow
 and its prompt-matching limitation.
 
 Local verification: 140 JVM tests passed, both APKs built, and lint completed with
-zero errors and 17 existing offline warnings. Independent review found three
+zero errors and 20 offline warnings. Three new `UseKtx` suggestions refer to the
+tracking store: it deliberately checks the boolean `commit()` result before
+allowing a POST; the KTX helper discards that result. Independent review found three
 material lifecycle bugs; all three regressions failed before the combined fix,
 then passed with the full suite. The new emulator test uses the actual preferences
 store, recreates the Activity/driver, and confirms exact-job cancellation without

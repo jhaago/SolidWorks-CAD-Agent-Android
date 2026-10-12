@@ -65,3 +65,11 @@ See [Remote Workstation](docs/remote-workstation.md) for guarantees, limitations
 
 - [Remote Workstation design](https://github.com/jhaago/SolidWorks-CAD-Agent/blob/feature/v1-solidworks-2020/docs/superpowers/specs/2026-10-04-android-remote-workstation-design.md)
 - [Remote shell implementation plan](https://github.com/jhaago/SolidWorks-CAD-Agent/blob/feature/v1-solidworks-2020/docs/superpowers/plans/2026-10-04-android-remote-session-shell-implementation.md)
+## Submission recovery compatibility
+
+Current phone builds use durable UUID recovery when the paired Host/RemoteAgent
+advertises `clientSubmissionIds`. Older workstations still use the legacy flow.
+The tracking record survives app recreation and contains only identity and Stop
+intent; it is not an offline prompt/photo outbox. Unconfirmed submissions stay
+bound to their UUID until the workstation confirms an outcome. New requests
+still require their existing authorization and CAD approval.

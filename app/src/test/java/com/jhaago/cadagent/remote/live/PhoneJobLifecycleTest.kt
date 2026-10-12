@@ -2,12 +2,286 @@ package com.jhaago.cadagent.remote.live
 
 import com.jhaago.cadagent.remote.model.*
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.*
 import org.junit.Assert.*
 import org.junit.Test
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class PhoneJobLifecycleTest {
+    @Test fun artifactResponseAcrossRenewalStillDeliversTheCurrentJobFile() = runTest {
+        val server = Server().also { it.state = "ReadyForReview" }
+        val responseGate = CompletableDeferred<Unit>()
+        var timeOffset = 0L
+        val network = object : RemoteTransport {
+            override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
+                if (operation.route == "session/renew") return renewedGrant()
+                val response = server.call(endpoint, operation)
+                if (operation.route.endsWith("/artifact")) responseGate.await()
+                return response
+            }
+        }
+        val driver = LiveConnectionDriver(backgroundScope, network,
+            PairedWorkstation(RemoteEndpoint.parse("https://pc.example"), "device", "credential"),
+            { testScheduler.currentTime + timeOffset }, { true })
+        driver.setForeground(true); driver.connect(); runCurrent()
+        val download = async { driver.downloadArtifact() }; runCurrent()
+        timeOffset = 240000; advanceTimeBy(1001); runCurrent()
+        responseGate.complete(Unit); runCurrent()
+        val artifact = download.await()
+        assertNotNull("Renewed authorization must not discard a valid file response", artifact)
+        assertEquals("Plate.sldprt", artifact!!.fileName)
+        assertArrayEquals(byteArrayOf(80, 65, 82, 84), artifact.bytes)
+        driver.close()
+    }
+
+    @Test fun artifactFromOldConnectionCannotBeDeliveredAfterReconnect() = runTest {
+        val server = Server().also { it.state = "ReadyForReview" }
+        val responseGate = CompletableDeferred<Unit>()
+        val network = object : RemoteTransport {
+            override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
+                val response = server.call(endpoint, operation)
+                if (operation.route.endsWith("/artifact")) responseGate.await()
+                return response
+            }
+        }
+        val driver = LiveConnectionDriver(backgroundScope, network,
+            PairedWorkstation(RemoteEndpoint.parse("https://pc.example"), "device", "credential"),
+            { testScheduler.currentTime }, { true })
+        driver.setForeground(true); driver.connect(); runCurrent()
+        val download = async { driver.downloadArtifact() }; runCurrent()
+        driver.disconnect(); runCurrent(); driver.connect(); runCurrent()
+        responseGate.complete(Unit); runCurrent()
+        assertNull("A previous connection's file response must be discarded", download.await())
+        driver.close()
+    }
+
+    @Test fun rejectedSubmissionDoesNotHideAnotherActiveWorkstationJob() = runTest {
+        val server = Server()
+        var reportActive = false
+        val network = object : RemoteTransport {
+            override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
+                if (operation.route == "agent/jobs") throw RemoteFailure(400, "http_error", "Submission rejected")
+                if (operation.route == "agent/status" && !reportActive) return RemoteResponse(200,
+                    """{"agentHostAvailable":true,"solidWorks":{"running":true,"attached":true,"visible":true},"activeJob":null}""")
+                return server.call(endpoint, operation)
+            }
+        }
+        val driver = LiveConnectionDriver(backgroundScope, network,
+            PairedWorkstation(RemoteEndpoint.parse("https://pc.example"), "device", "credential"),
+            { testScheduler.currentTime }, { true })
+        driver.setForeground(true); driver.connect(); runCurrent(); driver.setMode(RemoteControlMode.Agent)
+        assertNotNull(driver.submitAiTask("An invalid unrelated request")); runCurrent()
+        assertFalse(driver.status.value.task.active)
+        assertEquals("An invalid unrelated request", driver.status.value.task.instruction)
+        assertEquals("Submission rejected", driver.status.value.task.message)
+        reportActive = true; advanceTimeBy(1001); runCurrent()
+        assertEquals(jobId, driver.status.value.task.id)
+        assertEquals("Build plate", driver.status.value.task.instruction)
+        assertEquals(AiTaskPhase.AwaitingApproval, driver.status.value.task.phase)
+        assertNull("An active workstation job must prevent duplicate submission", driver.submitAiTask("Another task"))
+        driver.close()
+    }
+
+    private fun renewedGrant() = RemoteResponse(200,
+        """{"sessionToken":"renewed","session":{"sessionId":"session","authorityEpoch":1,"controlling":false,"expiresAt":"2026-10-06T00:10:00Z"}}""")
+
+    @Test fun approvalResponseAcrossRenewalClearsItsPendingAction() = runTest {
+        val server = Server()
+        val responseGate = CompletableDeferred<Unit>()
+        var timeOffset = 0L
+        val network = object : RemoteTransport {
+            override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
+                if (operation.route == "session/renew") return renewedGrant()
+                val response = server.call(endpoint, operation)
+                if (operation.route.endsWith("/approve")) responseGate.await()
+                return response
+            }
+        }
+        val driver = LiveConnectionDriver(backgroundScope, network,
+            PairedWorkstation(RemoteEndpoint.parse("https://pc.example"), "device", "credential"),
+            { testScheduler.currentTime + timeOffset }, { true })
+        driver.setForeground(true); driver.connect(); runCurrent()
+        assertTrue(driver.approvePlan()); runCurrent()
+        timeOffset = 240000; advanceTimeBy(1001); runCurrent()
+        responseGate.complete(Unit); runCurrent()
+        assertFalse(driver.status.value.task.actionPending)
+        assertTrue("A completed action must allow the next revision action", driver.requestChanges("Make it wider"))
+        driver.close()
+    }
+
+    @Test fun approvalFailureAcrossRenewalStillAllowsRetry() = runTest {
+        val server = Server()
+        val responseGate = CompletableDeferred<Unit>()
+        var timeOffset = 0L
+        val network = object : RemoteTransport {
+            override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
+                if (operation.route == "session/renew") return renewedGrant()
+                if (operation.route.endsWith("/approve")) {
+                    responseGate.await()
+                    throw RemoteFailure(503, "http_error", "Approval result unavailable")
+                }
+                return server.call(endpoint, operation)
+            }
+        }
+        val driver = LiveConnectionDriver(backgroundScope, network,
+            PairedWorkstation(RemoteEndpoint.parse("https://pc.example"), "device", "credential"),
+            { testScheduler.currentTime + timeOffset }, { true })
+        driver.setForeground(true); driver.connect(); runCurrent()
+        assertTrue(driver.approvePlan()); runCurrent()
+        timeOffset = 240000; advanceTimeBy(1001); runCurrent()
+        responseGate.complete(Unit); runCurrent()
+        assertFalse(driver.status.value.task.actionPending)
+        assertNotNull(driver.status.value.task.actionError)
+        assertTrue(driver.approvePlan())
+        driver.close()
+    }
+
+    @Test fun submissionResponseAcrossRenewalKeepsTheAcceptedJob() = runTest {
+        val server = Server()
+        val responseGate = CompletableDeferred<Unit>()
+        var timeOffset = 0L
+        val network = object : RemoteTransport {
+            override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
+                if (operation.route == "session/renew") return renewedGrant()
+                if (operation.route == "agent/status") return RemoteResponse(200,
+                    """{"agentHostAvailable":true,"solidWorks":{"running":true,"attached":true,"visible":true},"activeJob":null}""")
+                if (operation.route == "agent/jobs") { responseGate.await(); return RemoteResponse(202, server.job()) }
+                return server.call(endpoint, operation)
+            }
+        }
+        val driver = LiveConnectionDriver(backgroundScope, network,
+            PairedWorkstation(RemoteEndpoint.parse("https://pc.example"), "device", "credential"),
+            { testScheduler.currentTime + timeOffset }, { true })
+        driver.setForeground(true); driver.connect(); runCurrent(); driver.setMode(RemoteControlMode.Agent)
+        assertNotNull(driver.submitAiTask("Build plate")); runCurrent()
+        timeOffset = 240000; advanceTimeBy(1001); runCurrent()
+        responseGate.complete(Unit); runCurrent()
+        assertEquals(AiTaskPhase.AwaitingApproval, driver.status.value.task.phase)
+        assertTrue(driver.status.value.task.canApprove)
+        assertFalse("Renewing authorization must not cancel an accepted job", server.calls.any { it.route.endsWith("/cancel") })
+        driver.close()
+    }
+
+    @Test fun stoppingPendingSubmissionAfterRenewalCancelsWithTheCurrentToken() = runTest {
+        val server = Server()
+        val responseGate = CompletableDeferred<Unit>()
+        var timeOffset = 0L
+        var cancelledWith: String? = null
+        val network = object : RemoteTransport {
+            override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
+                if (operation.route == "session/renew") return renewedGrant()
+                if (operation.route == "agent/status") return RemoteResponse(200,
+                    """{"agentHostAvailable":true,"solidWorks":{"running":true,"attached":true,"visible":true},"activeJob":null}""")
+                if (operation.route == "agent/jobs") { responseGate.await(); return RemoteResponse(202, server.job()) }
+                if (operation.route.endsWith("/cancel")) {
+                    cancelledWith = operation.secret
+                    if (operation.secret != "renewed") throw RemoteFailure(401, "session_invalid", "Superseded token")
+                    server.state = "Cancelled"
+                }
+                return server.call(endpoint, operation)
+            }
+        }
+        val driver = LiveConnectionDriver(backgroundScope, network,
+            PairedWorkstation(RemoteEndpoint.parse("https://pc.example"), "device", "credential"),
+            { testScheduler.currentTime + timeOffset }, { true })
+        driver.setForeground(true); driver.connect(); runCurrent(); driver.setMode(RemoteControlMode.Agent)
+        assertNotNull(driver.submitAiTask("Build plate")); runCurrent(); driver.stopAiTask()
+        timeOffset = 240000; advanceTimeBy(1001); runCurrent()
+        responseGate.complete(Unit); runCurrent()
+        assertEquals("renewed", cancelledWith)
+        assertEquals(AiTaskPhase.Stopped, driver.status.value.task.phase)
+        driver.close()
+    }
+
+    @Test fun oldSubmissionFailureCannotReplaceTheReconnectedSessionJob() = runTest {
+        val server = Server()
+        val responseGate = CompletableDeferred<Unit>()
+        var reconnected = false
+        val network = object : RemoteTransport {
+            override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
+                if (operation.route == "agent/status" && !reconnected) return RemoteResponse(200,
+                    """{"agentHostAvailable":true,"solidWorks":{"running":true,"attached":true,"visible":true},"activeJob":null}""")
+                if (operation.route == "agent/jobs") { responseGate.await(); throw RemoteFailure(400, "http_error", "Old submission rejected") }
+                return server.call(endpoint, operation)
+            }
+        }
+        val driver = LiveConnectionDriver(backgroundScope, network,
+            PairedWorkstation(RemoteEndpoint.parse("https://pc.example"), "device", "credential"),
+            { testScheduler.currentTime }, { true })
+        driver.setForeground(true); driver.connect(); runCurrent(); driver.setMode(RemoteControlMode.Agent)
+        assertNotNull(driver.submitAiTask("Build plate")); runCurrent()
+        driver.disconnect(); runCurrent(); reconnected = true; driver.connect(); runCurrent()
+        assertEquals(jobId, driver.status.value.task.id)
+        responseGate.complete(Unit); runCurrent()
+        assertEquals(AiTaskPhase.AwaitingApproval, driver.status.value.task.phase)
+        assertTrue(driver.status.value.task.canApprove)
+        driver.close()
+    }
+
+    @Test fun automaticReconnectClearsOldMutationButOldResponseCannotClearNewAction() = runTest {
+        val server = Server()
+        val first = CompletableDeferred<Unit>()
+        val second = CompletableDeferred<Unit>()
+        var sessions = 0
+        var approvals = 0
+        var failHeartbeat = false
+        val network = object : RemoteTransport {
+            override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
+                val session = """{"sessionId":"session-$sessions","authorityEpoch":1,"controlling":false,"expiresAt":"2026-10-06T00:05:00Z"}"""
+                if (operation.route == "session/create") {
+                    sessions++
+                    return RemoteResponse(200,
+                        """{"sessionToken":"token-$sessions","session":{"sessionId":"session-$sessions","authorityEpoch":1,"controlling":false,"expiresAt":"2026-10-06T00:05:00Z"}}""")
+                }
+                if (operation.route == "session/heartbeat") {
+                    if (failHeartbeat) { failHeartbeat = false; throw RemoteFailure(0, "connection_failed", "Connection lost") }
+                    return RemoteResponse(200, session)
+                }
+                val response = server.call(endpoint, operation)
+                if (operation.route.endsWith("/approve")) {
+                    when (++approvals) { 1 -> first.await(); 2 -> second.await() }
+                }
+                return response
+            }
+        }
+        val driver = LiveConnectionDriver(backgroundScope, network,
+            PairedWorkstation(RemoteEndpoint.parse("https://pc.example"), "device", "credential"),
+            { testScheduler.currentTime }, { true })
+        driver.setForeground(true); driver.connect(); runCurrent()
+        assertTrue(driver.approvePlan()); runCurrent(); failHeartbeat = true
+        advanceTimeBy(2001); runCurrent()
+        assertEquals(2, sessions)
+        assertFalse("A fresh session must not inherit the old mutation flag", driver.status.value.task.actionPending)
+        assertTrue(driver.approvePlan()); runCurrent()
+        first.complete(Unit); runCurrent()
+        assertTrue("An old session response cannot complete the current action", driver.status.value.task.actionPending)
+        second.complete(Unit); runCurrent()
+        assertFalse(driver.status.value.task.actionPending)
+        driver.close()
+    }
+
+    @Test fun rejectedSubmissionAllowsRetryWithoutInventingAnActiveJob() = runTest {
+        listOf(400, 401, 403, 404, 405, 409, 413, 415, 422, 429).forEach { status ->
+            val server = Server()
+            val network = object : RemoteTransport {
+                override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
+                    if (operation.route == "agent/jobs") throw RemoteFailure(status, "http_error", "Submission rejected")
+                    if (operation.route == "agent/status") return RemoteResponse(200,
+                        """{"agentHostAvailable":true,"solidWorks":{"running":true,"attached":true,"visible":true},"activeJob":null}""")
+                    return server.call(endpoint, operation)
+                }
+            }
+            val driver = LiveConnectionDriver(backgroundScope, network,
+                PairedWorkstation(RemoteEndpoint.parse("https://pc.example"), "device", "credential"),
+                { testScheduler.currentTime }, { true })
+            driver.setForeground(true); driver.connect(); runCurrent(); driver.setMode(RemoteControlMode.Agent)
+            assertNotNull(driver.submitAiTask("Build plate")); runCurrent()
+            assertFalse("HTTP $status must not leave a rejected submission active", driver.status.value.task.active)
+            assertNotNull("HTTP $status must allow a corrected submission", driver.submitAiTask("Build corrected plate"))
+            driver.close()
+        }
+    }
     private val jobId = "11111111-1111-1111-1111-111111111111"
     private val revision = "22222222-2222-2222-2222-222222222222"
     private inner class Server : RemoteTransport {

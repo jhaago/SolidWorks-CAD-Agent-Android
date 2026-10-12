@@ -10,6 +10,60 @@ import org.junit.Test
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class LiveConnectionDriverTest {
+    @Test fun resumeResponseAcrossRenewalRetainsTheCurrentToken() = runTest {
+        val server = Server()
+        val responseGate = CompletableDeferred<Unit>()
+        var timeOffset = 0L
+        val network = object : RemoteTransport {
+            override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
+                if (operation.route == "session/renew") return RemoteResponse(200,
+                    """{"sessionToken":"renewed","session":${server.state()}}""")
+                val response = server.call(endpoint, operation)
+                if (operation.route == "session/resume") responseGate.await()
+                return response
+            }
+        }
+        val driver = LiveConnectionDriver(backgroundScope, network,
+            PairedWorkstation(RemoteEndpoint.parse("https://pc.example"), "device", "credential"),
+            nowMillis = { testScheduler.currentTime + timeOffset }, validateImage = { true })
+        driver.setForeground(true); driver.connect(); runCurrent(); driver.resumeControl(); runCurrent()
+        assertTrue(driver.status.value.controlPending)
+        timeOffset = 240000; advanceTimeBy(1001); runCurrent()
+        responseGate.complete(Unit); runCurrent()
+        assertFalse(driver.status.value.controlPending)
+        assertEquals(RemoteController.User, driver.status.value.controller)
+        assertTrue(driver.sendKeyboard(RemoteKeyboardEvent("A", KeyAction.Down))); runCurrent()
+        assertEquals("renewed", server.operations.last { it.route == "input" }.secret)
+        assertEquals(2L, server.operations.last { it.route == "input" }.payload["authorityEpoch"])
+        driver.close()
+    }
+
+    @Test fun supersededResumeAuthorityAcrossRenewalCannotEnableInput() = runTest {
+        val server = Server()
+        val responseGate = CompletableDeferred<Unit>()
+        var timeOffset = 0L
+        val network = object : RemoteTransport {
+            override suspend fun call(endpoint: RemoteEndpoint, operation: RemoteOperation): RemoteResponse {
+                if (operation.route == "session/renew") return RemoteResponse(200,
+                    """{"sessionToken":"renewed","session":${server.state()}}""")
+                val response = server.call(endpoint, operation)
+                if (operation.route == "session/resume") responseGate.await()
+                return response
+            }
+        }
+        val driver = LiveConnectionDriver(backgroundScope, network,
+            PairedWorkstation(RemoteEndpoint.parse("https://pc.example"), "device", "credential"),
+            nowMillis = { testScheduler.currentTime + timeOffset }, validateImage = { true })
+        driver.setForeground(true); driver.connect(); runCurrent(); driver.resumeControl(); runCurrent()
+        server.epoch = 3; server.controlling = false
+        timeOffset = 240000; advanceTimeBy(1001); runCurrent()
+        responseGate.complete(Unit); runCurrent()
+        assertFalse(driver.status.value.controlPending)
+        assertEquals(RemoteController.None, driver.status.value.controller)
+        assertFalse(driver.sendKeyboard(RemoteKeyboardEvent("A", KeyAction.Down)))
+        driver.close()
+    }
+
     private class Server : RemoteTransport {
         val operations = mutableListOf<RemoteOperation>()
         var epoch = 1L

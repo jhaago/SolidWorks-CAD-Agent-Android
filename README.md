@@ -2,6 +2,10 @@
 
 Native Android companion app for `jhaago/SolidWorks-CAD-Agent`. Development is reviewed on feature branches before integration to `main`.
 
+The current reviewed source is on `feature/current-state-reviewed`, including
+the UI modernisation, renewal/job-route fixes and revision draft ownership fix.
+See [current verification and remaining device checks](docs/current-state-review-2026-10-11.md).
+
 The app opens in **CAD Chat**, with separate **Remote** desktop and **Settings** tabs. Home/Jobs demo navigation and simulated workstation controls have been removed from the app. Their old screens, models and fakes remain under `app/src/test` for regression tests only. A workstation must be paired over private HTTPS before connecting.
 
 ## Try the paired workstation
@@ -19,6 +23,28 @@ Version 0.4.2 keeps a pairing request open through temporary HTTPS failures whil
 Version 0.4.3 displays a failed CAD plan approval beside the current plan and keeps the error visible through status polling until the user retries or the plan changes. This makes a phone-side HTTPS or authorization failure diagnosable; approval execution still requires a separate physical-phone test.
 
 There is no in-app simulated workstation path. Real Windows capture/input, mobile-data behavior and SOLIDWORKS geometry still require physical testing.
+
+## Engineering review — 10 October 2026
+
+The review starts at `7c636f5` on `feature/phone-first-v2` (0.4.3/code 7). This local revision fixes the production endpoint rejecting GUID job routes; definite HTTP rejection leaving a pending task; and token renewal/reconnect races in submission, approval/revision actions, manual control, cancellation and artifact download. Responses use stable session/connection/action ownership, while current tokens and server authority remain enforced. Old-session responses cannot update a new action.
+
+Final local verification: **123 JVM tests passed**, debug and instrumentation APKs built, and lint completed with **0 errors and 17 warnings**. Regressions were observed failing before correction. Evidence is in `build/review-logs/android-final-verification.log`, `app/build/test-results/testDebugUnitTest`, and `app/build/reports/lint-results-debug.xml`. The APK is a local test artifact; this revision was not published, deployed, installed or physically tested.
+
+Remaining P2: uncertain submissions still reconcile by prompt equality; replace that with a durable client submission ID across phone/proxy/Host. Physical acceptance must cover paired create/detail/approve/revise/cancel/complete/download, renewal during each action, reconnect, Wi-Fi/mobile transitions and manual-control exclusion during CAD execution. Instrumentation APK compilation does not prove device behavior. The companion Windows review and unresolved CAD verification limits are recorded in its existing CAD_AGENT_ARCHITECTURE.md and CAD_IMPLEMENTATION_STATUS.md.
+
+## UI modernisation — 11 October 2026
+
+Version **0.4.4 / code 8** introduces a consistent dark engineering workspace:
+cyan accents, vector navigation icons, bordered cards, accessible headings,
+structured operation/verification review, and grouped workstation settings.
+CAD Chat now links directly to pairing when unpaired. Remote actions wrap on
+small screens. Revision drafts survive lazy-list scrolling and the download
+picker belongs to the screen, independent of review-card visibility.
+
+Pairing, credentials, transport, controllers, CAD validation and execution
+authority are unchanged. No dependencies were added. The companion still
+requires its existing paired Windows HTTPS service; the localhost desktop Host
+is not a phone endpoint. See [UI changes and phone acceptance](docs/ui-modernisation.md).
 
 ## Build and test
 
@@ -39,3 +65,11 @@ See [Remote Workstation](docs/remote-workstation.md) for guarantees, limitations
 
 - [Remote Workstation design](https://github.com/jhaago/SolidWorks-CAD-Agent/blob/feature/v1-solidworks-2020/docs/superpowers/specs/2026-10-04-android-remote-workstation-design.md)
 - [Remote shell implementation plan](https://github.com/jhaago/SolidWorks-CAD-Agent/blob/feature/v1-solidworks-2020/docs/superpowers/plans/2026-10-04-android-remote-session-shell-implementation.md)
+## Submission recovery compatibility
+
+Current phone builds use durable UUID recovery when the paired Host/RemoteAgent
+advertises `clientSubmissionIds`. Older workstations still use the legacy flow.
+The tracking record survives app recreation and contains only identity and Stop
+intent; it is not an offline prompt/photo outbox. Unconfirmed submissions stay
+bound to their UUID until the workstation confirms an outcome. New requests
+still require their existing authorization and CAD approval.

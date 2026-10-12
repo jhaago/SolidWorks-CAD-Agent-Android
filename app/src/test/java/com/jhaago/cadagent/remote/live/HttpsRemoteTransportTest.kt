@@ -10,6 +10,24 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class HttpsRemoteTransportTest {
+    @Test fun productionTransportUsesAuthenticatedPerJobRoutes() = runTest {
+        val endpoint = RemoteEndpoint.parse("https://pc.example")
+        val job = "11111111-1111-1111-1111-111111111111"
+        val routes = listOf("agent/jobs/$job" to "GET", "agent/jobs/$job/artifact" to "GET") +
+            listOf("approve", "request-changes", "complete", "cancel").map { "agent/jobs/$job/$it" to "POST" }
+        routes.forEach { (route, method) ->
+            var opened: URL? = null
+            lateinit var connection: Connection
+            val response = HttpsRemoteTransport { url ->
+                opened = url
+                Connection(url).also { connection = it }
+            }.call(endpoint, RemoteOperation(route, method, "Session", "private-token"))
+            assertEquals(200, response.status)
+            assertEquals("https://pc.example/remote/v1/$route", opened.toString())
+            assertEquals("Session private-token", connection.getRequestProperty("Authorization"))
+            assertEquals(method, connection.requestMethod)
+        }
+    }
     private class Connection(url: URL, val code: Int = 200, val text: String = "{}") : HttpsURLConnection(url) {
         val sent = ByteArrayOutputStream()
         override fun connect() = Unit

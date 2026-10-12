@@ -5,6 +5,10 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.DisposableEffect
@@ -30,6 +34,7 @@ import com.jhaago.cadagent.ui.common.CadAgentViewModelFactory
 import com.jhaago.cadagent.ui.navigation.Destination
 import com.jhaago.cadagent.ui.settings.SettingsScreen
 import com.jhaago.cadagent.ui.theme.CadAgentTheme
+import com.jhaago.cadagent.ui.theme.CadIcons
 
 @Composable
 fun CadAgentApp(container: AppContainer = viewModel<CadAgentAppViewModel>().container) {
@@ -59,7 +64,7 @@ fun CadAgentApp(container: AppContainer = viewModel<CadAgentAppViewModel>().cont
     CadAgentTheme {
         Scaffold(
             bottomBar = {
-                NavigationBar {
+                NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainerLow, tonalElevation = 0.dp) {
                     topLevel.forEach { destination ->
                         NavigationBarItem(
                             selected = currentRoute == destination.route,
@@ -70,8 +75,14 @@ fun CadAgentApp(container: AppContainer = viewModel<CadAgentAppViewModel>().cont
                                     restoreState = true
                                 }
                             },
-                            icon = { Text(destination.label.take(1)) },
+                            icon = { Icon(when (destination) {
+                                Destination.CadChat -> CadIcons.Chat
+                                Destination.Remote -> CadIcons.Desktop
+                                else -> CadIcons.Settings
+                            }, contentDescription = null) },
                             label = { Text(destination.label) },
+                            colors = NavigationBarItemDefaults.colors(indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                                selectedIconColor = MaterialTheme.colorScheme.primary, selectedTextColor = MaterialTheme.colorScheme.primary),
                         )
                     }
                 }
@@ -82,7 +93,7 @@ fun CadAgentApp(container: AppContainer = viewModel<CadAgentAppViewModel>().cont
                 startDestination = Destination.CadChat.route,
                 modifier = Modifier.padding(innerPadding),
             ) {
-                composable(Destination.CadChat.route) { CadChatScreen(state, remoteViewModel) }
+                composable(Destination.CadChat.route) { CadChatScreen(state, remoteViewModel, onOpenSettings = { navController.navigate(Destination.Settings.route) { launchSingleTop = true } }) }
                 composable(Destination.Remote.route) {
                     RemoteScreen(state, remoteViewModel)
                 }

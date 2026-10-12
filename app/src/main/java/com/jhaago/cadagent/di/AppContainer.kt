@@ -75,8 +75,8 @@ class AppContainer {
     }
 
     fun configureRemoteSettings(scope: CoroutineScope, transport: RemoteTransport, store: RemoteCredentialStore,
-        initialOrigin: String = "", saveOrigin: (String) -> Unit = {}) {
-        remoteSettings = WorkstationSettingsController(scope, this, transport, store, initialOrigin, saveOrigin)
+        initialOrigin: String = "", submissionStore: PendingSubmissionStore? = null, saveOrigin: (String) -> Unit = {}) {
+        remoteSettings = WorkstationSettingsController(scope, this, transport, store, initialOrigin, saveOrigin, submissionStore = submissionStore)
     }
 
     fun close() {

@@ -11,7 +11,10 @@ class CadAgentAppViewModel(application: Application) : AndroidViewModel(applicat
     val container = AppContainer().apply {
         val preferences = application.getSharedPreferences("remote-workstation", 0)
         configureRemoteSettings(viewModelScope, HttpsRemoteTransport(), KeystoreRemoteCredentialStore(application),
-            preferences.getString("origin", "").orEmpty()) { preferences.edit().putString("origin", it).apply() }
+            preferences.getString("origin", "").orEmpty(),
+            submissionStore = SharedPreferencesPendingSubmissionStore(application.getSharedPreferences("pending-cad-submission", 0))) {
+            preferences.edit().putString("origin", it).apply()
+        }
     }
     override fun onCleared() {
         container.close()

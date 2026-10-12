@@ -12,6 +12,7 @@ data class RemoteWorkstationStatus(
     val controlPending: Boolean = false,
     val agentHostAvailable: Boolean? = null,
     val supportsJobImages: Boolean = false,
+    val supportsClientSubmissionIds: Boolean = false,
     val executionMode: String? = null,
     val aiModel: String? = null,
     val solidWorksRunning: Boolean = false,

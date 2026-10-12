@@ -13,6 +13,7 @@ class WorkstationSettingsController(
     private val scope: CoroutineScope, private val container: AppContainer, private val transport: RemoteTransport,
     private val store: RemoteCredentialStore, initialOrigin: String = "", private val saveOrigin: (String) -> Unit = {},
     private val storageDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val submissionStore: PendingSubmissionStore? = null,
 ) {
     private val mutable = MutableStateFlow(WorkstationSettingsState(endpoint = initialOrigin))
     val state = mutable.asStateFlow()
@@ -76,7 +77,11 @@ class WorkstationSettingsController(
         cancelPairing(); val id = revision
         job = scope.launch {
             try {
-                withContext(storageDispatcher) { store.delete(endpoint) }
+                withContext(storageDispatcher) {
+                    val paired = store.read(endpoint)
+                    if (paired != null) submissionStore?.clearScope(SubmissionScope(endpoint.origin, paired.deviceId))
+                    store.delete(endpoint)
+                }
                 if (id == revision) {
                     if (!container.selectUnpaired()) {
                         failure("Saved pairing was removed, but Remote is still active. Disconnect Remote before clearing this workstation.")
@@ -90,7 +95,7 @@ class WorkstationSettingsController(
         }
     }
     private fun activate(record: PairedWorkstation) {
-        val driver = LiveConnectionDriver(scope, transport, record)
+        val driver = LiveConnectionDriver(scope, transport, record, submissionStore = submissionStore)
         if (!container.selectLive(driver)) { driver.close(); failure("Disconnect Remote before changing the workstation."); return }
         saveOrigin(record.endpoint.origin)
         mutable.value = mutable.value.copy(endpoint = record.endpoint.origin, paired = true, pairingSecret = "", error = null, message = "Live workstation selected. Open Remote to connect in view-only mode.")

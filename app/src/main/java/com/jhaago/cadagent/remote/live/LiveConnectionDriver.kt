@@ -22,6 +22,7 @@ class LiveConnectionDriver(
     private val workstation: PairedWorkstation,
     private val nowMillis: () -> Long = { System.nanoTime() / 1_000_000 },
     private val validateImage: (RemoteDisplayFrame) -> Boolean = ::validateJpeg,
+    private val submissionStore: PendingSubmissionStore? = null,
 ) : AutoCloseable {
     private val owned = SupervisorJob(scope.coroutineContext[Job])
     private val work = CoroutineScope(scope.coroutineContext + owned)
